@@ -1,4 +1,4 @@
-package com.shelf.app;
+package com.trackia.app;
 
 import com.getcapacitor.BridgeActivity;
 

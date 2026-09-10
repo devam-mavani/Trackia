@@ -1,8 +1,8 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.shelf.app',
-  appName: 'Shelf',
+  appId: 'com.trackia.app',
+  appName: 'Trackia',
   webDir: 'www'
 };
 

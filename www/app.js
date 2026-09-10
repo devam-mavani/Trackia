@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const STORAGE_KEY = "shelf.items.v1";
+  const STORAGE_KEY = "trackia.items.v1";
 
   const TYPES = {
     anime:  { label: "Anime",     unit: "Episode", hasSeason: true,  color: "var(--c-anime)"  },
@@ -257,7 +257,7 @@
     const a = document.createElement("a");
     const stamp = new Date().toISOString().slice(0, 10);
     a.href = url;
-    a.download = `shelf-backup-${stamp}.json`;
+    a.download = `trackia-backup-${stamp}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -285,7 +285,7 @@
         render();
         alert(`Imported ${added} title${added === 1 ? "" : "s"}.`);
       } catch (e) {
-        alert("That file doesn't look like a Shelf backup.");
+        alert("That file doesn't look like a Trackia backup.");
       }
       importInput.value = "";
       closeMenu();
@@ -360,7 +360,7 @@
 
   deleteBtn.addEventListener("click", () => {
     if (!editingId) return;
-    if (!confirm("Delete this title from your shelf?")) return;
+    if (!confirm("Delete this title from your list?")) return;
     items = items.filter((i) => i.id !== editingId);
     saveItems(items);
     closeForm();
