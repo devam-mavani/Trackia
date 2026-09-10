@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#12131A" />
+<title>Shelf — media log</title>
+<meta name="description" content="Track anime, series, movies, books and manga: seasons, episodes, pages and chapters, all in one place." />
+
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Shelf" />
+
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<div class="app">
+
+  <header class="topbar">
+    <h1 class="wordmark">Shelf</h1>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="searchToggle" aria-label="Search" title="Search">
+        <svg viewBox="0 0 24 24" width="20" height="20"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><line x1="21" y1="21" x2="16.2" y2="16.2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <button class="icon-btn" id="menuToggle" aria-label="More" title="More">
+        <svg viewBox="0 0 24 24" width="20" height="20"><circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="search-row" id="searchRow" hidden>
+    <input type="text" id="searchInput" placeholder="Search your shelf" autocomplete="off" />
+  </div>
+
+  <nav class="tabs" id="typeTabs" aria-label="Filter by type">
+    <button class="tab active" data-type="all">All</button>
+    <button class="tab" data-type="anime">Anime</button>
+    <button class="tab" data-type="series">Series</button>
+    <button class="tab" data-type="movie">Movies</button>
+    <button class="tab" data-type="book">Books</button>
+    <button class="tab" data-type="manga">Manga</button>
+  </nav>
+
+  <div class="status-row">
+    <select id="statusFilter" aria-label="Filter by status">
+      <option value="all">Everything</option>
+      <option value="active">In progress</option>
+      <option value="planning">Plan to start</option>
+      <option value="completed">Completed</option>
+      <option value="onhold">On hold</option>
+      <option value="dropped">Dropped</option>
+    </select>
+    <select id="sortOrder" aria-label="Sort order">
+      <option value="updated">Recently updated</option>
+      <option value="title">Title A–Z</option>
+      <option value="rating">Highest rated</option>
+    </select>
+  </div>
+
+  <main class="list" id="list"></main>
+
+  <p class="empty" id="emptyState" hidden>Nothing here yet. Tap the + button to add the first thing you're watching or reading.</p>
+
+  <button class="fab" id="addBtn" aria-label="Add title">
+    <svg viewBox="0 0 24 24" width="26" height="26"><line x1="12" y1="5" x2="12" y2="19" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+  </button>
+
+</div>
+
+<div class="sheet-backdrop" id="menuBackdrop" hidden></div>
+<div class="menu-sheet" id="menuSheet" hidden>
+  <button id="exportBtn">Export backup (.json)</button>
+  <label class="file-label">
+    Import backup (.json)
+    <input type="file" id="importInput" accept="application/json" hidden />
+  </label>
+  <button id="closeMenuBtn" class="muted">Close</button>
+</div>
+
+<div class="sheet-backdrop" id="formBackdrop" hidden></div>
+<form class="form-sheet" id="entryForm" hidden>
+  <div class="form-handle"></div>
+  <h2 id="formTitle">Add title</h2>
+
+  <label>
+    Title
+    <input type="text" id="fieldTitle" required maxlength="120" placeholder="e.g. Frieren: Beyond Journey's End" />
+  </label>
+
+  <label>
+    Type
+    <div class="segmented" id="fieldType">
+      <button type="button" data-value="anime">Anime</button>
+      <button type="button" data-value="series">Series</button>
+      <button type="button" data-value="movie">Movie</button>
+      <button type="button" data-value="book">Book</button>
+      <button type="button" data-value="manga">Manga</button>
+    </div>
+  </label>
+
+  <div class="row" id="seasonRow">
+    <label>
+      Season
+      <input type="number" id="fieldSeason" min="0" placeholder="1" />
+    </label>
+  </div>
+
+  <div class="row" id="progressRow">
+    <label id="currentLabel">
+      Episode
+      <input type="number" id="fieldCurrent" min="0" placeholder="0" />
+    </label>
+    <label>
+      Total <span class="optional">(optional)</span>
+      <input type="number" id="fieldTotal" min="0" placeholder="—" />
+    </label>
+  </div>
+
+  <label>
+    Status
+    <div class="segmented wrap" id="fieldStatus">
+      <button type="button" data-value="planning">Plan to start</button>
+      <button type="button" data-value="active">In progress</button>
+      <button type="button" data-value="completed">Completed</button>
+      <button type="button" data-value="onhold">On hold</button>
+      <button type="button" data-value="dropped">Dropped</button>
+    </div>
+  </label>
+
+  <label>
+    Rating <span class="optional">(0–10, optional)</span>
+    <input type="number" id="fieldRating" min="0" max="10" step="1" placeholder="—" />
+  </label>
+
+  <label>
+    Notes <span class="optional">(optional)</span>
+    <textarea id="fieldNotes" rows="2" maxlength="500" placeholder="Thoughts, where you left off, who recommended it…"></textarea>
+  </label>
+
+  <div class="form-actions">
+    <button type="button" id="deleteBtn" class="danger" hidden>Delete</button>
+    <button type="button" id="cancelBtn" class="muted">Cancel</button>
+    <button type="submit" id="saveBtn" class="primary">Save</button>
+  </div>
+</form>
+
+<script src="app.js"></script>
+</body>
+</html>

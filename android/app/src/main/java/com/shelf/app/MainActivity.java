@@ -1,0 +1,5 @@
+package com.shelf.app;
+
+import com.getcapacitor.BridgeActivity;
+
+public class MainActivity extends BridgeActivity {}
