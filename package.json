@@ -11,10 +11,8 @@
   "license": "ISC",
   "dependencies": {
     "@capacitor/android": "^8.5.1",
+    "@capacitor/camera": "^8.2.4",
     "@capacitor/cli": "^8.5.1",
     "@capacitor/core": "^8.5.1"
-  },
-  "devDependencies": {
-    "typescript": "^7.0.2"
   }
 }

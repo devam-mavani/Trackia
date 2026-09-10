@@ -397,6 +397,45 @@
     }
   }
 
+  function isNativeCameraAvailable() {
+    return !!(
+      window.Capacitor &&
+      typeof window.Capacitor.isNativePlatform === "function" &&
+      window.Capacitor.isNativePlatform() &&
+      window.Capacitor.Plugins &&
+      window.Capacitor.Plugins.Camera
+    );
+  }
+
+  async function pickCoverNative() {
+    try {
+      const photo = await window.Capacitor.Plugins.Camera.getPhoto({
+        resultType: "dataUrl",
+        source: "PHOTOS",
+        quality: 80,
+        width: 500,
+        height: 750,
+      });
+      if (photo && photo.dataUrl) {
+        formCover = photo.dataUrl;
+        showCoverPreview();
+      }
+    } catch (err) {
+      // user cancelled the picker, or permission was denied — nothing to do
+    }
+  }
+
+  coverPicker.addEventListener("click", (e) => {
+    // On the native Android app, raw <input type="file"> pickers are unreliable
+    // (can freeze the WebView after returning from the system picker), so use
+    // the native Camera plugin instead. In the browser/PWA, fall through to the
+    // label's default behavior, which opens the hidden file input below.
+    if (isNativeCameraAvailable()) {
+      e.preventDefault();
+      pickCoverNative();
+    }
+  });
+
   fieldCover.addEventListener("change", () => {
     const file = fieldCover.files[0];
     fieldCover.value = "";

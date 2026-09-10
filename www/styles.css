@@ -1,12 +1,12 @@
 :root {
-  --bg: #12131a;
-  --surface: #1a1c26;
-  --surface-2: #21232f;
-  --border: #2c2e3b;
-  --text: #ededf2;
-  --text-muted: #8a8ca3;
-  --accent: #e8a33d;
-  --accent-ink: #1b1204;
+  --bg: #000000;
+  --surface: #121212;
+  --surface-2: #1c1c1c;
+  --border: #2a2a2a;
+  --text: #f2f2f2;
+  --text-muted: #9a9a9a;
+  --accent: #e60000;
+  --accent-ink: #ffffff;
 
   --c-anime: #e8a33d;
   --c-series: #5fa8d3;
