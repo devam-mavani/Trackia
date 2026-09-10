@@ -71,6 +71,7 @@
   const addBtn = document.getElementById("addBtn");
   const formBackdrop = document.getElementById("formBackdrop");
   const form = document.getElementById("entryForm");
+  const formHandle = document.getElementById("formHandle");
   const formTitle = document.getElementById("formTitle");
   const cancelBtn = document.getElementById("cancelBtn");
   const closeFormBtn = document.getElementById("closeFormBtn");
@@ -540,6 +541,8 @@
     fieldTagEntry.value = "";
     renderTagChips();
 
+    form.style.transform = "";
+    form.classList.remove("dragging");
     formBackdrop.hidden = false;
     form.hidden = false;
     setTimeout(() => fieldTitle.focus(), 50);
@@ -548,6 +551,8 @@
   function closeForm() {
     formBackdrop.hidden = true;
     form.hidden = true;
+    form.style.transform = "";
+    form.classList.remove("dragging");
     editingId = null;
   }
 
@@ -555,6 +560,54 @@
   cancelBtn.addEventListener("click", closeForm);
   closeFormBtn.addEventListener("click", closeForm);
   formBackdrop.addEventListener("click", closeForm);
+
+  // ---------- swipe-down-to-close ----------
+
+  (() => {
+    const DISMISS_DISTANCE = 110; // px of downward drag that counts as "close"
+    const DISMISS_VELOCITY = 0.5; // px/ms — a quick flick closes even if short
+    let dragging = false;
+    let startY = 0;
+    let lastY = 0;
+    let lastT = 0;
+    let velocity = 0;
+
+    function onPointerDown(e) {
+      dragging = true;
+      startY = lastY = e.clientY;
+      lastT = e.timeStamp;
+      velocity = 0;
+      form.classList.add("dragging");
+      formHandle.setPointerCapture(e.pointerId);
+    }
+
+    function onPointerMove(e) {
+      if (!dragging) return;
+      const dy = Math.max(0, e.clientY - startY); // only allow dragging downward
+      const dt = e.timeStamp - lastT;
+      if (dt > 0) velocity = (e.clientY - lastY) / dt;
+      lastY = e.clientY;
+      lastT = e.timeStamp;
+      form.style.transform = `translateY(${dy}px)`;
+    }
+
+    function onPointerUp(e) {
+      if (!dragging) return;
+      dragging = false;
+      form.classList.remove("dragging");
+      const dy = Math.max(0, e.clientY - startY);
+      if (dy > DISMISS_DISTANCE || velocity > DISMISS_VELOCITY) {
+        closeForm();
+      } else {
+        form.style.transform = "";
+      }
+    }
+
+    formHandle.addEventListener("pointerdown", onPointerDown);
+    formHandle.addEventListener("pointermove", onPointerMove);
+    formHandle.addEventListener("pointerup", onPointerUp);
+    formHandle.addEventListener("pointercancel", onPointerUp);
+  })();
 
   deleteBtn.addEventListener("click", () => {
     if (!editingId) return;
