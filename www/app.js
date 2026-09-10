@@ -397,14 +397,16 @@
     }
   }
 
-  function isNativeCameraAvailable() {
+  function isNativeShell() {
     return !!(
       window.Capacitor &&
       typeof window.Capacitor.isNativePlatform === "function" &&
-      window.Capacitor.isNativePlatform() &&
-      window.Capacitor.Plugins &&
-      window.Capacitor.Plugins.Camera
+      window.Capacitor.isNativePlatform()
     );
+  }
+
+  function isNativeCameraAvailable() {
+    return isNativeShell() && !!(window.Capacitor.Plugins && window.Capacitor.Plugins.Camera);
   }
 
   async function pickCoverNative() {
@@ -421,18 +423,30 @@
         showCoverPreview();
       }
     } catch (err) {
+      console.error("Camera.getPhoto failed", err);
       // user cancelled the picker, or permission was denied — nothing to do
     }
   }
 
   coverPicker.addEventListener("click", (e) => {
-    // On the native Android app, raw <input type="file"> pickers are unreliable
-    // (can freeze the WebView after returning from the system picker), so use
-    // the native Camera plugin instead. In the browser/PWA, fall through to the
-    // label's default behavior, which opens the hidden file input below.
+    // Always take over the click ourselves. Raw <input type="file"> pickers are
+    // unreliable inside the Android WebView (they can freeze the whole sheet
+    // after returning from the system picker), so we never want to silently
+    // fall through to the label's default file-input behavior while running
+    // as the native app.
+    e.preventDefault();
+
     if (isNativeCameraAvailable()) {
-      e.preventDefault();
       pickCoverNative();
+    } else if (isNativeShell()) {
+      // Running as the native app but the Camera plugin isn't registered —
+      // surface this instead of risking the freeze-prone fallback.
+      const known = window.Capacitor.Plugins ? Object.keys(window.Capacitor.Plugins).join(", ") : "(none)";
+      console.error("Camera plugin not available. Registered plugins:", known);
+      alert("Cover photo picking isn't available in this build. (Camera plugin not detected.)");
+    } else {
+      // Plain browser/PWA — open the hidden file input ourselves.
+      fieldCover.click();
     }
   });
 
