@@ -73,6 +73,7 @@
   const form = document.getElementById("entryForm");
   const formTitle = document.getElementById("formTitle");
   const cancelBtn = document.getElementById("cancelBtn");
+  const closeFormBtn = document.getElementById("closeFormBtn");
   const deleteBtn = document.getElementById("deleteBtn");
 
   const fieldTitle = document.getElementById("fieldTitle");
@@ -552,6 +553,7 @@
 
   addBtn.addEventListener("click", () => openForm(null));
   cancelBtn.addEventListener("click", closeForm);
+  closeFormBtn.addEventListener("click", closeForm);
   formBackdrop.addEventListener("click", closeForm);
 
   deleteBtn.addEventListener("click", () => {

@@ -347,11 +347,24 @@ body {
   margin: 6px auto 0;
 }
 
+.form-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .form-sheet h2 {
   font-family: var(--font-display);
   font-weight: 500;
   font-size: 20px;
   margin: 2px 0 0;
+}
+
+.form-header .icon-btn {
+  flex: none;
+  margin-top: -4px;
+  margin-right: -6px;
 }
 
 .form-sheet label {
