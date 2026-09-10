@@ -87,8 +87,19 @@
   const fieldRating = document.getElementById("fieldRating");
   const fieldNotes = document.getElementById("fieldNotes");
 
+  const fieldCover = document.getElementById("fieldCover");
+  const coverPreview = document.getElementById("coverPreview");
+  const coverPreviewImg = document.getElementById("coverPreviewImg");
+  const removeCoverBtn = document.getElementById("removeCoverBtn");
+  const coverPicker = document.getElementById("coverPicker");
+
+  const tagChips = document.getElementById("tagChips");
+  const fieldTagEntry = document.getElementById("fieldTagEntry");
+
   let formType = "anime";
   let formStatus = "planning";
+  let formCover = null;
+  let formTags = [];
 
   // ---------- rendering ----------
 
@@ -96,7 +107,12 @@
     let filtered = items.filter((it) => {
       if (activeType !== "all" && it.type !== activeType) return false;
       if (activeStatus !== "all" && it.status !== activeStatus) return false;
-      if (searchQuery && !it.title.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        const inTitle = it.title.toLowerCase().includes(q);
+        const inTags = Array.isArray(it.tags) && it.tags.some((t) => t.toLowerCase().includes(q));
+        if (!inTitle && !inTags) return false;
+      }
       return true;
     });
 
@@ -116,45 +132,69 @@
 
   function renderItem(it) {
     const meta = TYPES[it.type];
-    const row = document.createElement("div");
-    row.className = "item";
-    row.style.setProperty("--spine", meta.color);
+    const card = document.createElement("div");
+    card.className = "item";
+    card.style.setProperty("--spine", meta.color);
 
-    const main = document.createElement("div");
-    main.className = "item-main";
+    // ----- cover -----
+    const cover = document.createElement("div");
+    cover.className = "item-cover";
+    if (it.coverImage) {
+      const img = document.createElement("img");
+      img.src = it.coverImage;
+      img.alt = "";
+      img.loading = "lazy";
+      cover.appendChild(img);
+    } else {
+      cover.classList.add("no-cover");
+      const initial = document.createElement("span");
+      initial.textContent = (it.title || "?").trim().charAt(0).toUpperCase();
+      cover.appendChild(initial);
+    }
+
+    const typeBadge = document.createElement("span");
+    typeBadge.className = "cover-badge cover-type-badge";
+    typeBadge.textContent = meta.label;
+    cover.appendChild(typeBadge);
+
+    if (typeof it.rating === "number") {
+      const ratingBadge = document.createElement("span");
+      ratingBadge.className = "cover-badge cover-rating-badge";
+      ratingBadge.textContent = "★ " + it.rating;
+      cover.appendChild(ratingBadge);
+    }
+
+    card.appendChild(cover);
+
+    // ----- body -----
+    const body = document.createElement("div");
+    body.className = "item-body";
 
     const title = document.createElement("p");
     title.className = "item-title";
     title.textContent = it.title;
-    main.appendChild(title);
+    body.appendChild(title);
 
-    const metaLine = document.createElement("div");
-    metaLine.className = "item-meta";
-    const dot = document.createElement("span");
-    dot.className = "type-dot";
-    metaLine.appendChild(dot);
-    const typeSpan = document.createElement("span");
-    typeSpan.textContent = meta.label;
-    metaLine.appendChild(typeSpan);
     const statusSpan = document.createElement("span");
     statusSpan.className = "status-label " + it.status;
     statusSpan.textContent = STATUS[it.status];
-    metaLine.appendChild(statusSpan);
-    main.appendChild(metaLine);
+    body.appendChild(statusSpan);
 
     if (meta.unit) {
       const progLine = document.createElement("div");
       progLine.className = "progress-line";
       const parts = [];
-      if (meta.hasSeason && it.season) parts.push(`Season ${it.season}`);
+      if (meta.hasSeason && it.season) parts.push(`S${it.season}`);
       const cur = it.current || 0;
       if (it.total) {
-        parts.push(`${meta.unit} ${cur} of ${it.total}`);
+        parts.push(`${meta.unit} ${cur}/${it.total}`);
       } else if (cur) {
         parts.push(`${meta.unit} ${cur}`);
       }
-      progLine.textContent = parts.join(", ");
-      if (parts.length) main.appendChild(progLine);
+      if (parts.length) {
+        progLine.textContent = parts.join(" · ");
+        body.appendChild(progLine);
+      }
 
       if (it.total) {
         const track = document.createElement("div");
@@ -164,23 +204,20 @@
         const pct = Math.max(0, Math.min(100, (cur / it.total) * 100));
         fill.style.width = pct + "%";
         track.appendChild(fill);
-        main.appendChild(track);
+        body.appendChild(track);
       }
     }
 
-    row.appendChild(main);
-
-    const side = document.createElement("div");
-    side.className = "item-side";
-
-    if (typeof it.rating === "number") {
-      const rating = document.createElement("span");
-      rating.className = "rating";
-      rating.textContent = it.rating + "/10";
-      side.appendChild(rating);
-    } else {
-      const spacer = document.createElement("span");
-      side.appendChild(spacer);
+    if (Array.isArray(it.tags) && it.tags.length) {
+      const tagRow = document.createElement("div");
+      tagRow.className = "item-tags";
+      it.tags.slice(0, 4).forEach((tag) => {
+        const chip = document.createElement("span");
+        chip.className = "item-tag";
+        chip.textContent = tag;
+        tagRow.appendChild(chip);
+      });
+      body.appendChild(tagRow);
     }
 
     if (meta.unit && it.status === "active") {
@@ -196,14 +233,13 @@
         saveItems(items);
         render();
       });
-      side.appendChild(bump);
+      body.appendChild(bump);
     }
 
-    row.appendChild(side);
+    card.appendChild(body);
+    card.addEventListener("click", () => openForm(it.id));
 
-    row.addEventListener("click", () => openForm(it.id));
-
-    return row;
+    return card;
   }
 
   // ---------- filters ----------
@@ -323,6 +359,106 @@
     if (meta.unit) currentLabel.firstChild.textContent = meta.unit + " ";
   }
 
+  // ---------- cover image ----------
+
+  function resizeImageToDataUrl(file, maxW, maxH, quality) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          let { width, height } = img;
+          const ratio = Math.min(maxW / width, maxH / height, 1);
+          width = Math.max(1, Math.round(width * ratio));
+          height = Math.max(1, Math.round(height * ratio));
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL("image/jpeg", quality));
+        };
+        img.onerror = () => reject(new Error("Could not load image"));
+        img.src = reader.result;
+      };
+      reader.onerror = () => reject(new Error("Could not read file"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function showCoverPreview() {
+    if (formCover) {
+      coverPreviewImg.src = formCover;
+      coverPreview.hidden = false;
+      coverPicker.hidden = true;
+    } else {
+      coverPreview.hidden = true;
+      coverPicker.hidden = false;
+    }
+  }
+
+  fieldCover.addEventListener("change", () => {
+    const file = fieldCover.files[0];
+    fieldCover.value = "";
+    if (!file) return;
+    resizeImageToDataUrl(file, 500, 750, 0.82)
+      .then((dataUrl) => {
+        formCover = dataUrl;
+        showCoverPreview();
+      })
+      .catch(() => alert("Couldn't load that image."));
+  });
+
+  removeCoverBtn.addEventListener("click", () => {
+    formCover = null;
+    showCoverPreview();
+  });
+
+  // ---------- tags ----------
+
+  function renderTagChips() {
+    tagChips.innerHTML = "";
+    formTags.forEach((tag, idx) => {
+      const chip = document.createElement("span");
+      chip.className = "tag-chip";
+      const label = document.createElement("span");
+      label.textContent = tag;
+      chip.appendChild(label);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "✕";
+      remove.setAttribute("aria-label", "Remove tag " + tag);
+      remove.addEventListener("click", () => {
+        formTags.splice(idx, 1);
+        renderTagChips();
+      });
+      chip.appendChild(remove);
+      tagChips.appendChild(chip);
+    });
+  }
+
+  function addTagFromInput() {
+    const raw = fieldTagEntry.value.trim().replace(/,+$/, "");
+    if (!raw) return;
+    const tag = raw.slice(0, 24);
+    if (!formTags.some((t) => t.toLowerCase() === tag.toLowerCase())) {
+      formTags.push(tag);
+      renderTagChips();
+    }
+    fieldTagEntry.value = "";
+  }
+
+  fieldTagEntry.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      addTagFromInput();
+    } else if (e.key === "Backspace" && !fieldTagEntry.value && formTags.length) {
+      formTags.pop();
+      renderTagChips();
+    }
+  });
+  fieldTagEntry.addEventListener("blur", addTagFromInput);
+
   function openForm(id) {
     editingId = id || null;
     const existing = id ? items.find((i) => i.id === id) : null;
@@ -342,6 +478,13 @@
     fieldTotal.value = existing && existing.total ? existing.total : "";
     fieldRating.value = existing && typeof existing.rating === "number" ? existing.rating : "";
     fieldNotes.value = existing && existing.notes ? existing.notes : "";
+
+    formCover = existing && existing.coverImage ? existing.coverImage : null;
+    showCoverPreview();
+
+    formTags = existing && Array.isArray(existing.tags) ? existing.tags.slice() : [];
+    fieldTagEntry.value = "";
+    renderTagChips();
 
     formBackdrop.hidden = false;
     form.hidden = false;
@@ -382,6 +525,8 @@
       status: formStatus,
       rating: fieldRating.value !== "" ? Number(fieldRating.value) : null,
       notes: fieldNotes.value.trim() || null,
+      coverImage: formCover || null,
+      tags: formTags.slice(),
       updatedAt: Date.now(),
     };
 

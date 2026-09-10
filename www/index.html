@@ -92,6 +92,21 @@
   </label>
 
   <label>
+    Cover image <span class="optional">(optional)</span>
+    <div class="cover-upload" id="coverUpload">
+      <div class="cover-preview" id="coverPreview" hidden>
+        <img id="coverPreviewImg" alt="" />
+        <button type="button" id="removeCoverBtn" class="cover-remove" aria-label="Remove image">✕</button>
+      </div>
+      <label class="cover-picker" id="coverPicker">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+        <span>Add cover</span>
+        <input type="file" id="fieldCover" accept="image/*" hidden />
+      </label>
+    </div>
+  </label>
+
+  <label>
     Type
     <div class="segmented" id="fieldType">
       <button type="button" data-value="anime">Anime</button>
@@ -139,6 +154,14 @@
   <label>
     Notes <span class="optional">(optional)</span>
     <textarea id="fieldNotes" rows="2" maxlength="500" placeholder="Thoughts, where you left off, who recommended it…"></textarea>
+  </label>
+
+  <label>
+    Tags <span class="optional">(optional)</span>
+    <div class="tag-input" id="tagInputWrap">
+      <div class="tag-chips" id="tagChips"></div>
+      <input type="text" id="fieldTagEntry" placeholder="Add a tag, press Enter" maxlength="24" />
+    </div>
   </label>
 
   <div class="form-actions">
