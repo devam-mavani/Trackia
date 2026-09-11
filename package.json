@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "cap:sync": "cap sync android",
+    "assets": "capacitor-assets generate --android",
     "postinstall": "echo 'Trackia web deps installed.'"
   },
   "dependencies": {
@@ -18,6 +19,7 @@
     "@capacitor/share": "^6.0.3"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^6.2.0",
     "vite": "^5.4.11"
   }

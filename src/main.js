@@ -824,6 +824,16 @@ function showToast(msg) {
 /*  Boot                                                                   */
 /* ---------------------------------------------------------------------- */
 
+// Hide the top-bar logo slot if src/assets/logo.png is a placeholder/blank
+// (0x0 natural size) or fails to load, so the text-only wordmark shows instead.
+const brandLogo = document.getElementById('brandLogo');
+if (brandLogo) {
+  brandLogo.addEventListener('error', () => { brandLogo.hidden = true; });
+  brandLogo.addEventListener('load', () => {
+    if (brandLogo.naturalWidth < 2) brandLogo.hidden = true;
+  });
+}
+
 applySettings();
 updateUnitLabels();
 render();
