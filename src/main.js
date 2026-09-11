@@ -1,4 +1,6 @@
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 
 /* ---------------------------------------------------------------------- */
 /*  Storage                                                                */
@@ -689,13 +691,44 @@ $('#resetThemeBtn').addEventListener('click', () => {
 
 /* ---- Export / Import ---- */
 
-$('#exportBtn').addEventListener('click', () => {
+$('#exportBtn').addEventListener('click', async () => {
   const payload = { app: 'trackia', version: 1, exportedAt: new Date().toISOString(), entries };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const json = JSON.stringify(payload, null, 2);
+  const filename = `trackia-backup-${new Date().toISOString().slice(0, 10)}.json`;
+
+  if (window.Capacitor?.isNativePlatform?.()) {
+    // Inside the Android WebView, the <a download> + blob-URL trick doesn't
+    // reliably save anywhere visible — there's no real "Downloads" folder
+    // exposed to it. Write the file with Filesystem instead, then hand it
+    // off through the native Share sheet so the user picks where it goes
+    // (Files, Drive, email, etc.) without needing storage permissions.
+    try {
+      const written = await Filesystem.writeFile({
+        path: filename,
+        data: json,
+        directory: Directory.Cache,
+        encoding: Encoding.UTF8,
+      });
+      await Share.share({
+        title: 'Trackia backup',
+        text: 'Trackia library backup',
+        url: written.uri,
+        dialogTitle: 'Save or send your Trackia backup',
+      });
+      showToast('Backup ready to save');
+    } catch (err) {
+      if (err?.message?.toLowerCase().includes('cancel')) return; // user dismissed the share sheet
+      showToast('Could not prepare the backup file');
+    }
+    return;
+  }
+
+  // Plain browser: normal blob download.
+  const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `trackia-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
