@@ -108,6 +108,8 @@ function applySettings() {
     const v = settings.theme[input.dataset.var];
     input.value = v && /^#([0-9a-f]{6})$/i.test(v) ? v : '#000000';
   });
+
+  $('#themePreset').value = detectPreset();
 }
 
 /* ---------------------------------------------------------------------- */
@@ -180,6 +182,14 @@ function renderCard(e) {
     const img = document.createElement('img');
     img.src = e.cover;
     img.alt = e.title;
+    img.addEventListener('error', () => {
+      // Broken/offline remote link: swap in the initial-letter placeholder.
+      img.remove();
+      const span = document.createElement('span');
+      span.className = 'initial';
+      span.textContent = initials(e.title);
+      cover.insertBefore(span, cover.firstChild);
+    });
     cover.appendChild(img);
   } else {
     const span = document.createElement('span');
@@ -431,6 +441,43 @@ function setCoverPreview(dataUrl, titleForInitial) {
 
 $('#coverClearBtn').addEventListener('click', () => setCoverPreview(null));
 
+// Fall back to the initial-letter placeholder if a linked image fails to
+// load (broken URL, offline, host down, etc.) instead of showing a blank box.
+coverImg.addEventListener('error', () => {
+  if (!coverImg.hidden) {
+    showToast("Couldn't load that image link");
+    setCoverPreview(null);
+  }
+});
+
+/* ---- Cover from a web link ---- */
+const coverLinkRow = $('#coverLinkRow');
+const coverLinkInput = $('#coverLinkInput');
+
+$('#coverLinkBtn').addEventListener('click', () => {
+  coverLinkRow.hidden = !coverLinkRow.hidden;
+  if (!coverLinkRow.hidden) {
+    coverLinkInput.value = state.draftCover && /^https?:\/\//i.test(state.draftCover) ? state.draftCover : '';
+    coverLinkInput.focus();
+  }
+});
+
+function useCoverLink() {
+  const url = coverLinkInput.value.trim();
+  if (!url) return;
+  if (!/^https?:\/\//i.test(url)) {
+    showToast('Enter a full image URL, starting with http(s)://');
+    return;
+  }
+  setCoverPreview(url);
+  coverLinkRow.hidden = true;
+}
+
+$('#coverLinkUseBtn').addEventListener('click', useCoverLink);
+coverLinkInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); useCoverLink(); }
+});
+
 /* ---- Cover picker: official @capacitor/camera plugin ---- */
 $('#coverPickBtn').addEventListener('click', async () => {
   try {
@@ -470,6 +517,8 @@ function resetForm() {
   form.reset();
   state.draftTags = [];
   state.editingId = null;
+  coverLinkRow.hidden = true;
+  coverLinkInput.value = '';
   setCoverPreview(null);
   f_rating.value = 0;
   f_rating_val.textContent = '—';
@@ -555,6 +604,33 @@ deleteEntryBtn.addEventListener('click', () => {
 /*  Menu / settings sheet                                                  */
 /* ---------------------------------------------------------------------- */
 
+const THEME_PRESETS = {
+  default: { '--c-bg': '', '--c-surface': '', '--c-accent': '', '--c-text': '' },
+  blood:    { '--c-bg': '#0a0000', '--c-surface': '#1a0707', '--c-accent': '#ff1a1a', '--c-text': '#ffecec' },
+  midnight: { '--c-bg': '#00030a', '--c-surface': '#0a1428', '--c-accent': '#3d7fff', '--c-text': '#eaf1ff' },
+  forest:   { '--c-bg': '#020a04', '--c-surface': '#0d1f10', '--c-accent': '#2fbf5a', '--c-text': '#eafff0' },
+  sunset:   { '--c-bg': '#0a0500', '--c-surface': '#241006', '--c-accent': '#ff8a1e', '--c-text': '#fff2e4' },
+  mono:     { '--c-bg': '#000000', '--c-surface': '#161616', '--c-accent': '#e6e6e6', '--c-text': '#ffffff' },
+};
+
+function detectPreset() {
+  const t = settings.theme;
+  for (const [name, vals] of Object.entries(THEME_PRESETS)) {
+    if (Object.keys(vals).every((k) => (t[k] || '') === (vals[k] || ''))) return name;
+  }
+  return 'custom';
+}
+
+function applyThemePreset(name) {
+  const preset = THEME_PRESETS[name];
+  if (!preset) return;
+  settings.theme = { ...preset };
+  saveSettings(settings);
+  applySettings();
+}
+
+$('#themePreset').addEventListener('change', (e) => applyThemePreset(e.target.value));
+
 $('#menuToggle').addEventListener('click', () => openSheet(menuSheet));
 $('#menuClose').addEventListener('click', () => closeSheet(menuSheet));
 
@@ -592,6 +668,7 @@ document.querySelectorAll('.hex-input').forEach((input) => {
     }
     saveSettings(settings);
     applySettings();
+    $('#themePreset').value = detectPreset();
   });
 });
 
@@ -601,13 +678,12 @@ document.querySelectorAll('.color-swatch').forEach((input) => {
     settings.theme[key] = input.value;
     saveSettings(settings);
     applySettings();
+    $('#themePreset').value = detectPreset();
   });
 });
 
 $('#resetThemeBtn').addEventListener('click', () => {
-  settings.theme = { '--c-bg': '', '--c-surface': '', '--c-accent': '', '--c-text': '' };
-  saveSettings(settings);
-  applySettings();
+  applyThemePreset('default');
   showToast('Theme reset to default');
 });
 

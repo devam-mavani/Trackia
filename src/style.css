@@ -368,6 +368,23 @@ a, button:focus-visible, input:focus-visible, select:focus-visible, textarea:foc
 .cover-preview img { width: 100%; height: 100%; object-fit: cover; }
 #coverInitial { font-size: 1.4rem; color: var(--c-text-dim); }
 .cover-actions { display: flex; flex-direction: column; gap: 8px; }
+.cover-actions .btn-ghost { padding: 8px 14px; font-size: 0.78rem; text-align: left; }
+
+.cover-link-row {
+  display: flex;
+  gap: 8px;
+  margin: -8px 0 16px;
+}
+.cover-link-row input {
+  flex: 1;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  padding: 9px 12px;
+  color: var(--c-text);
+  font-size: 0.85rem;
+  min-width: 0;
+}
 
 .tag-input-wrap {
   background: var(--c-surface-2);

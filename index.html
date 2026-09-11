@@ -94,8 +94,14 @@
           </div>
           <div class="cover-actions">
             <button type="button" class="btn-ghost" id="coverPickBtn">Choose cover</button>
+            <button type="button" class="btn-ghost" id="coverLinkBtn">From link</button>
             <button type="button" class="btn-ghost danger" id="coverClearBtn" hidden>Remove</button>
           </div>
+        </div>
+
+        <div class="cover-link-row" id="coverLinkRow" hidden>
+          <input type="url" id="coverLinkInput" placeholder="https://example.com/cover.jpg" inputmode="url" />
+          <button type="button" class="btn-ghost" id="coverLinkUseBtn">Use</button>
         </div>
 
         <label class="field">
@@ -197,7 +203,19 @@
 
         <div class="settings-group">
           <h3>Theme colors</h3>
-          <p class="settings-hint">Set any hex value. Leave as-is to keep the default Trackia look.</p>
+          <p class="settings-hint">Pick a preset, or set any hex value for full control.</p>
+          <label class="field" style="margin-bottom: 14px;">
+            <span>Preset</span>
+            <select id="themePreset" class="select" style="width: 100%;">
+              <option value="default">Trackia (default)</option>
+              <option value="blood">Blood Moon</option>
+              <option value="midnight">Midnight Blue</option>
+              <option value="forest">Forest</option>
+              <option value="sunset">Sunset</option>
+              <option value="mono">Mono</option>
+              <option value="custom" disabled>Custom</option>
+            </select>
+          </label>
           <div class="color-row" data-key="bg"><span>Background</span><input type="text" class="hex-input" data-var="--c-bg" placeholder="#000000"><input type="color" class="color-swatch" data-var="--c-bg"></div>
           <div class="color-row" data-key="surface"><span>Card surface</span><input type="text" class="hex-input" data-var="--c-surface" placeholder="#121212"><input type="color" class="color-swatch" data-var="--c-surface"></div>
           <div class="color-row" data-key="accent"><span>Accent</span><input type="text" class="hex-input" data-var="--c-accent" placeholder="#e60000"><input type="color" class="color-swatch" data-var="--c-accent"></div>
