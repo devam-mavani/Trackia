@@ -4,44 +4,19 @@
   const STORAGE_KEY = "trackia.items.v1";
 
   const TYPES = {
-    anime: {
-      label: "Anime",
-      unit: "Episode",
-      hasSeason: true,
-      color: "var(--c-anime)",
-    },
-    series: {
-      label: "TV series",
-      unit: "Episode",
-      hasSeason: true,
-      color: "var(--c-series)",
-    },
-    movie: {
-      label: "Movie",
-      unit: null,
-      hasSeason: false,
-      color: "var(--c-movie)",
-    },
-    book: {
-      label: "Book",
-      unit: "Page",
-      hasSeason: false,
-      color: "var(--c-book)",
-    },
-    manga: {
-      label: "Manga",
-      unit: "Chapter",
-      hasSeason: false,
-      color: "var(--c-manga)",
-    },
+    anime:  { label: "Anime",     unit: "Episode", hasSeason: true,  color: "var(--c-anime)"  },
+    series: { label: "TV series", unit: "Episode", hasSeason: true,  color: "var(--c-series)" },
+    movie:  { label: "Movie",     unit: null,       hasSeason: false, color: "var(--c-movie)"  },
+    book:   { label: "Book",      unit: "Page",     hasSeason: false, color: "var(--c-book)"   },
+    manga:  { label: "Manga",     unit: "Chapter",  hasSeason: false, color: "var(--c-manga)"  },
   };
 
   const STATUS = {
-    planning: "Plan to start",
-    active: "In progress",
+    planning:  "Plan to start",
+    active:    "In progress",
     completed: "Completed",
-    onhold: "On hold",
-    dropped: "Dropped",
+    onhold:    "On hold",
+    dropped:   "Dropped",
   };
 
   // ---------- storage ----------
@@ -96,10 +71,8 @@
   const addBtn = document.getElementById("addBtn");
   const formBackdrop = document.getElementById("formBackdrop");
   const form = document.getElementById("entryForm");
-  const formHandle = document.getElementById("formHandle");
   const formTitle = document.getElementById("formTitle");
   const cancelBtn = document.getElementById("cancelBtn");
-  const closeFormBtn = document.getElementById("closeFormBtn");
   const deleteBtn = document.getElementById("deleteBtn");
 
   const fieldTitle = document.getElementById("fieldTitle");
@@ -137,9 +110,7 @@
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
         const inTitle = it.title.toLowerCase().includes(q);
-        const inTags =
-          Array.isArray(it.tags) &&
-          it.tags.some((t) => t.toLowerCase().includes(q));
+        const inTags = Array.isArray(it.tags) && it.tags.some((t) => t.toLowerCase().includes(q));
         if (!inTitle && !inTags) return false;
       }
       return true;
@@ -276,9 +247,7 @@
   typeTabs.addEventListener("click", (e) => {
     const btn = e.target.closest(".tab");
     if (!btn) return;
-    typeTabs
-      .querySelectorAll(".tab")
-      .forEach((b) => b.classList.remove("active"));
+    typeTabs.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     activeType = btn.dataset.type;
     render();
@@ -319,9 +288,7 @@
   menuBackdrop.addEventListener("click", closeMenu);
 
   exportBtn.addEventListener("click", () => {
-    const blob = new Blob([JSON.stringify(items, null, 2)], {
-      type: "application/json",
-    });
+    const blob = new Blob([JSON.stringify(items, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     const stamp = new Date().toISOString().slice(0, 10);
@@ -439,14 +406,19 @@
   }
 
   function isNativeCameraAvailable() {
-    return (
-      isNativeShell() &&
-      !!(window.Capacitor.Plugins && window.Capacitor.Plugins.Camera)
-    );
+    return isNativeShell() && !!(window.Capacitor.Plugins && window.Capacitor.Plugins.Camera);
   }
 
   async function pickCoverNative() {
     try {
+      try {
+        await window.Capacitor.Plugins.Camera.requestPermissions({ permissions: ["photos"] });
+      } catch (permErr) {
+        // some Capacitor/Android versions throw here even when permission is
+        // fine — ignore and still try getPhoto, which will surface a real
+        // permission failure of its own if needed.
+      }
+
       const photo = await window.Capacitor.Plugins.Camera.getPhoto({
         resultType: "dataUrl",
         source: "PHOTOS",
@@ -477,13 +449,9 @@
     } else if (isNativeShell()) {
       // Running as the native app but the Camera plugin isn't registered —
       // surface this instead of risking the freeze-prone fallback.
-      const known = window.Capacitor.Plugins
-        ? Object.keys(window.Capacitor.Plugins).join(", ")
-        : "(none)";
+      const known = window.Capacitor.Plugins ? Object.keys(window.Capacitor.Plugins).join(", ") : "(none)";
       console.error("Camera plugin not available. Registered plugins:", known);
-      alert(
-        "Cover photo picking isn't available in this build. (Camera plugin not detected.)",
-      );
+      alert("Cover photo picking isn't available in this build. (Camera plugin not detected.)");
     } else {
       // Plain browser/PWA — open the hidden file input ourselves.
       fieldCover.click();
@@ -545,11 +513,7 @@
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault();
       addTagFromInput();
-    } else if (
-      e.key === "Backspace" &&
-      !fieldTagEntry.value &&
-      formTags.length
-    ) {
+    } else if (e.key === "Backspace" && !fieldTagEntry.value && formTags.length) {
       formTags.pop();
       renderTagChips();
     }
@@ -573,22 +537,15 @@
     fieldSeason.value = existing && existing.season ? existing.season : "";
     fieldCurrent.value = existing && existing.current ? existing.current : "";
     fieldTotal.value = existing && existing.total ? existing.total : "";
-    fieldRating.value =
-      existing && typeof existing.rating === "number" ? existing.rating : "";
+    fieldRating.value = existing && typeof existing.rating === "number" ? existing.rating : "";
     fieldNotes.value = existing && existing.notes ? existing.notes : "";
 
     formCover = existing && existing.coverImage ? existing.coverImage : null;
     showCoverPreview();
 
-    formTags =
-      existing && Array.isArray(existing.tags) ? existing.tags.slice() : [];
+    formTags = existing && Array.isArray(existing.tags) ? existing.tags.slice() : [];
     fieldTagEntry.value = "";
     renderTagChips();
-
-    form.style.transform = "";
-    form.classList.remove("dragging");
-    form.classList.remove("closing");
-    formBackdrop.classList.remove("closing");
 
     formBackdrop.hidden = false;
     form.hidden = false;
@@ -596,83 +553,14 @@
   }
 
   function closeForm() {
-    if (form.hidden) return;
-
-    // Stop any drag state
-    form.classList.remove("dragging");
-
-    // Remove inline transform so the CSS animation can take over
-    form.style.transform = "";
-
-    // Add closing state
-    form.classList.add("closing");
-    formBackdrop.classList.add("closing");
-
-    // Hide only AFTER the animation completes
-    setTimeout(() => {
-      form.hidden = true;
-      formBackdrop.hidden = true;
-
-      form.classList.remove("closing");
-      formBackdrop.classList.remove("closing");
-
-      form.style.transform = "";
-      editingId = null;
-    }, 180);
+    formBackdrop.hidden = true;
+    form.hidden = true;
+    editingId = null;
   }
 
   addBtn.addEventListener("click", () => openForm(null));
   cancelBtn.addEventListener("click", closeForm);
-  closeFormBtn.addEventListener("click", closeForm);
   formBackdrop.addEventListener("click", closeForm);
-
-  // ---------- swipe-down-to-close ----------
-
-  (() => {
-    const DISMISS_DISTANCE = 110; // px of downward drag that counts as "close"
-    const DISMISS_VELOCITY = 0.5; // px/ms — a quick flick closes even if short
-    let dragging = false;
-    let startY = 0;
-    let lastY = 0;
-    let lastT = 0;
-    let velocity = 0;
-
-    function onPointerDown(e) {
-      dragging = true;
-      startY = lastY = e.clientY;
-      lastT = e.timeStamp;
-      velocity = 0;
-      form.classList.add("dragging");
-      formHandle.setPointerCapture(e.pointerId);
-    }
-
-    function onPointerMove(e) {
-      if (!dragging) return;
-      const dy = Math.max(0, e.clientY - startY); // only allow dragging downward
-      const dt = e.timeStamp - lastT;
-      if (dt > 0) velocity = (e.clientY - lastY) / dt;
-      lastY = e.clientY;
-      lastT = e.timeStamp;
-      form.style.transform = `translateY(${dy}px)`;
-    }
-
-    function onPointerUp(e) {
-      if (!dragging) return;
-      dragging = false;
-      form.classList.remove("dragging");
-      const dy = Math.max(0, e.clientY - startY);
-      if (dy > DISMISS_DISTANCE || velocity > DISMISS_VELOCITY) {
-        closeForm();
-      } else {
-        form.style.transform = "";
-      }
-    }
-
-    formHandle.addEventListener("pointerdown", onPointerDown);
-    formHandle.addEventListener("pointermove", onPointerMove);
-    formHandle.addEventListener("pointerup", onPointerUp);
-    formHandle.addEventListener("pointercancel", onPointerUp);
-  })();
 
   deleteBtn.addEventListener("click", () => {
     if (!editingId) return;
@@ -721,9 +609,7 @@
 
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
-      navigator.serviceWorker
-        .register("sw.js")
-        .catch((e) => console.error("SW registration failed", e));
+      navigator.serviceWorker.register("sw.js").catch((e) => console.error("SW registration failed", e));
     });
   }
 })();
