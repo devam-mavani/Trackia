@@ -4,19 +4,44 @@
   const STORAGE_KEY = "trackia.items.v1";
 
   const TYPES = {
-    anime:  { label: "Anime",     unit: "Episode", hasSeason: true,  color: "var(--c-anime)"  },
-    series: { label: "TV series", unit: "Episode", hasSeason: true,  color: "var(--c-series)" },
-    movie:  { label: "Movie",     unit: null,       hasSeason: false, color: "var(--c-movie)"  },
-    book:   { label: "Book",      unit: "Page",     hasSeason: false, color: "var(--c-book)"   },
-    manga:  { label: "Manga",     unit: "Chapter",  hasSeason: false, color: "var(--c-manga)"  },
+    anime: {
+      label: "Anime",
+      unit: "Episode",
+      hasSeason: true,
+      color: "var(--c-anime)",
+    },
+    series: {
+      label: "TV series",
+      unit: "Episode",
+      hasSeason: true,
+      color: "var(--c-series)",
+    },
+    movie: {
+      label: "Movie",
+      unit: null,
+      hasSeason: false,
+      color: "var(--c-movie)",
+    },
+    book: {
+      label: "Book",
+      unit: "Page",
+      hasSeason: false,
+      color: "var(--c-book)",
+    },
+    manga: {
+      label: "Manga",
+      unit: "Chapter",
+      hasSeason: false,
+      color: "var(--c-manga)",
+    },
   };
 
   const STATUS = {
-    planning:  "Plan to start",
-    active:    "In progress",
+    planning: "Plan to start",
+    active: "In progress",
     completed: "Completed",
-    onhold:    "On hold",
-    dropped:   "Dropped",
+    onhold: "On hold",
+    dropped: "Dropped",
   };
 
   // ---------- storage ----------
@@ -112,7 +137,9 @@
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
         const inTitle = it.title.toLowerCase().includes(q);
-        const inTags = Array.isArray(it.tags) && it.tags.some((t) => t.toLowerCase().includes(q));
+        const inTags =
+          Array.isArray(it.tags) &&
+          it.tags.some((t) => t.toLowerCase().includes(q));
         if (!inTitle && !inTags) return false;
       }
       return true;
@@ -249,7 +276,9 @@
   typeTabs.addEventListener("click", (e) => {
     const btn = e.target.closest(".tab");
     if (!btn) return;
-    typeTabs.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
+    typeTabs
+      .querySelectorAll(".tab")
+      .forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     activeType = btn.dataset.type;
     render();
@@ -290,7 +319,9 @@
   menuBackdrop.addEventListener("click", closeMenu);
 
   exportBtn.addEventListener("click", () => {
-    const blob = new Blob([JSON.stringify(items, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(items, null, 2)], {
+      type: "application/json",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     const stamp = new Date().toISOString().slice(0, 10);
@@ -408,7 +439,10 @@
   }
 
   function isNativeCameraAvailable() {
-    return isNativeShell() && !!(window.Capacitor.Plugins && window.Capacitor.Plugins.Camera);
+    return (
+      isNativeShell() &&
+      !!(window.Capacitor.Plugins && window.Capacitor.Plugins.Camera)
+    );
   }
 
   async function pickCoverNative() {
@@ -443,9 +477,13 @@
     } else if (isNativeShell()) {
       // Running as the native app but the Camera plugin isn't registered —
       // surface this instead of risking the freeze-prone fallback.
-      const known = window.Capacitor.Plugins ? Object.keys(window.Capacitor.Plugins).join(", ") : "(none)";
+      const known = window.Capacitor.Plugins
+        ? Object.keys(window.Capacitor.Plugins).join(", ")
+        : "(none)";
       console.error("Camera plugin not available. Registered plugins:", known);
-      alert("Cover photo picking isn't available in this build. (Camera plugin not detected.)");
+      alert(
+        "Cover photo picking isn't available in this build. (Camera plugin not detected.)",
+      );
     } else {
       // Plain browser/PWA — open the hidden file input ourselves.
       fieldCover.click();
@@ -507,7 +545,11 @@
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault();
       addTagFromInput();
-    } else if (e.key === "Backspace" && !fieldTagEntry.value && formTags.length) {
+    } else if (
+      e.key === "Backspace" &&
+      !fieldTagEntry.value &&
+      formTags.length
+    ) {
       formTags.pop();
       renderTagChips();
     }
@@ -531,13 +573,15 @@
     fieldSeason.value = existing && existing.season ? existing.season : "";
     fieldCurrent.value = existing && existing.current ? existing.current : "";
     fieldTotal.value = existing && existing.total ? existing.total : "";
-    fieldRating.value = existing && typeof existing.rating === "number" ? existing.rating : "";
+    fieldRating.value =
+      existing && typeof existing.rating === "number" ? existing.rating : "";
     fieldNotes.value = existing && existing.notes ? existing.notes : "";
 
     formCover = existing && existing.coverImage ? existing.coverImage : null;
     showCoverPreview();
 
-    formTags = existing && Array.isArray(existing.tags) ? existing.tags.slice() : [];
+    formTags =
+      existing && Array.isArray(existing.tags) ? existing.tags.slice() : [];
     fieldTagEntry.value = "";
     renderTagChips();
 
@@ -549,11 +593,25 @@
   }
 
   function closeForm() {
-    formBackdrop.hidden = true;
-    form.hidden = true;
-    form.style.transform = "";
-    form.classList.remove("dragging");
-    editingId = null;
+    // Prevent multiple close calls
+    if (form.hidden) return;
+
+    // Start the slide-down animation
+    form.classList.add("closing");
+    formBackdrop.classList.add("closing");
+
+    // Wait for the animation to finish before hiding
+    setTimeout(() => {
+      formBackdrop.hidden = true;
+      form.hidden = true;
+
+      form.style.transform = "";
+      form.classList.remove("dragging");
+      form.classList.remove("closing");
+      formBackdrop.classList.remove("closing");
+
+      editingId = null;
+    }, 200);
   }
 
   addBtn.addEventListener("click", () => openForm(null));
@@ -656,7 +714,9 @@
 
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
-      navigator.serviceWorker.register("sw.js").catch((e) => console.error("SW registration failed", e));
+      navigator.serviceWorker
+        .register("sw.js")
+        .catch((e) => console.error("SW registration failed", e));
     });
   }
 })();
