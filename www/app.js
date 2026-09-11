@@ -587,31 +587,38 @@
 
     form.style.transform = "";
     form.classList.remove("dragging");
+    form.classList.remove("closing");
+    formBackdrop.classList.remove("closing");
+
     formBackdrop.hidden = false;
     form.hidden = false;
     setTimeout(() => fieldTitle.focus(), 50);
   }
 
   function closeForm() {
-    // Prevent multiple close calls
     if (form.hidden) return;
 
-    // Start the slide-down animation
+    // Stop any drag state
+    form.classList.remove("dragging");
+
+    // Remove inline transform so the CSS animation can take over
+    form.style.transform = "";
+
+    // Add closing state
     form.classList.add("closing");
     formBackdrop.classList.add("closing");
 
-    // Wait for the animation to finish before hiding
+    // Hide only AFTER the animation completes
     setTimeout(() => {
-      formBackdrop.hidden = true;
       form.hidden = true;
+      formBackdrop.hidden = true;
 
-      form.style.transform = "";
-      form.classList.remove("dragging");
       form.classList.remove("closing");
       formBackdrop.classList.remove("closing");
 
+      form.style.transform = "";
       editingId = null;
-    }, 200);
+    }, 180);
   }
 
   addBtn.addEventListener("click", () => openForm(null));

@@ -388,12 +388,33 @@ body {
 }
 
 .form-sheet.closing {
-  transform: translateY(100%);
+  animation: slide-down 0.18s ease-in forwards;
 }
 
 .sheet-backdrop.closing {
-  opacity: 0;
-  transition: opacity 0.2s ease-out;
+  animation: backdrop-fade-out 0.18s ease-in forwards;
+}
+
+@keyframes slide-down {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+
+  to {
+    transform: translateY(100%);
+    opacity: 1;
+  }
+}
+
+@keyframes backdrop-fade-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
 }
 
 .form-handle {
