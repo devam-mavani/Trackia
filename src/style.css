@@ -19,6 +19,12 @@
 
 * { box-sizing: border-box; }
 
+/* Author rules like `.sheet { display: flex }` normally beat the browser's
+   built-in [hidden] rule (author > user-agent origin, regardless of
+   specificity), so elements with both a display-setting class and the
+   `hidden` attribute stay visible. Force hidden to always win. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;
