@@ -1,80 +1,85 @@
-# Trackia (Android app)
+# Trackia
 
-This is the same Trackia media tracker, wrapped as a real native Android app
-with [Capacitor](https://capacitorjs.com/) instead of a browser-installed
-PWA. All the app's HTML/CSS/JS is bundled *inside* the app package — there's
-no GitHub Pages URL involved, and no browser wrapper.
+Offline-first media tracker for anime, series, movies, books, and manga.
+Pure black + red theme, everything stored in `localStorage`, wrapped as a
+native Android app with Capacitor.
 
-You don't need Android Studio installed. A GitHub Actions workflow in this
-repo (`.github/workflows/build-apk.yml`) builds the `.apk` in the cloud every
-time you push, and you download the finished file from GitHub.
+## Data model
 
-## 1. Push this to a GitHub repo
+Each entry: `title`, `type` (anime/series/movie/book/manga), `cover` (optional
+data URL), `season` (anime/series only), `progress` + optional `total`
+(unit depends on type — episodes/pages/chapters), `status` (plan/progress/
+completed/hold/dropped), `rating` (0–10), `notes`, `tags[]`.
 
-Create a new repo and push everything in this folder (the `android/`,
-`www/`, `.github/` folders, and the root config files).
+## Run the web app locally
 
 ```bash
-cd trackia-app
-git init
-git add .
-git commit -m "Trackia: native Android wrapper"
-git branch -M main
-git remote add origin https://github.com/<your-username>/<repo-name>.git
-git push -u origin main
+npm install
+npm run dev       # dev server at http://localhost:5173
+npm run build     # production build -> dist/
 ```
 
-`node_modules/` isn't included — you don't need it locally, since the
-workflow installs dependencies itself in the cloud. (If you ever want to run
-Capacitor commands on your own machine, `npm install` first.)
+## Android (Capacitor)
 
-## 2. Let GitHub build the APK
+The `android/` native project is **not committed** — it's generated fresh
+each time from `capacitor.config.json`, which keeps the repo small and avoids
+drift between the web build and the native shell.
 
-1. On GitHub, open the repo's **Actions** tab.
-2. You should see a run called "Build APK" already in progress (it triggers
-   automatically on push to `main`). If not, click **Build APK** in the
-   sidebar → **Run workflow**.
-3. Wait for it to finish (a few minutes — first run is slower).
-4. Open the finished run, scroll to **Artifacts**, and download
-   **trackia-debug-apk**. It's a zip containing `app-debug.apk`.
+```bash
+npm install
+npm run build              # builds dist/
+npx cap add android        # first time only, locally
+npx cap sync android
+node scripts/patch-manifest.js   # adds camera + storage permissions
+npx cap open android       # opens Android Studio
+```
 
-You can do steps 3–4 straight from your phone's browser if you'd rather not
-use a computer — GitHub's Actions/Artifacts pages work fine on mobile.
+To build a debug APK from the command line instead of Android Studio:
 
-## 3. Install it on your Pixel
+```bash
+cd android
+./gradlew assembleDebug
+# APK lands in android/app/build/outputs/apk/debug/
+```
 
-1. Unzip the downloaded zip if you got it on a computer, then copy
-   `app-debug.apk` to your phone (or just download it directly on the phone,
-   where it lands in **Downloads**).
-2. Open it from **Files** (or tap the download notification).
-3. Android will ask to allow installs from that source the first time —
-   tap **Settings**, enable **Allow from this source**, then go back and
-   tap **Install**.
-4. Open **Trackia** from your app drawer like any other app.
+### Camera plugin & permissions
 
-This is a debug build, which is the normal way to install your own app
-without publishing it anywhere — it's signed with a throwaway debug key
-that Gradle generates automatically, so Android is fine installing it, it
-just won't come from the Play Store. Nothing about functionality is
-different from a release build.
+The cover-image picker uses the official `@capacitor/camera` plugin
+(`Camera.getPhoto` with `CameraSource.Prompt`, so the user can choose
+"take photo" or "choose from gallery"). In a plain desktop browser (no
+native Capacitor runtime) it falls back to a hidden `<input type="file">`
+so the web build stays usable outside the app.
 
-## Data and updates
+`scripts/patch-manifest.js` adds the following to
+`android/app/src/main/AndroidManifest.xml` after `cap add android` runs:
 
-- Your list is stored on-device (inside the app's own storage) — nothing is
-  sent anywhere.
-- Because the web assets are now bundled into the APK rather than fetched
-  from a URL, updating the app means: edit files in `www/`, commit, push,
-  and repeat steps 2–3 to install the new APK over the old one (same
-  `applicationId`, so it updates in place and keeps your data).
-- If you later want it on the Play Store, that needs a signed release build
-  and a Play Console account — a different, heavier process. This debug-APK
-  route is the right one for "just on my own phone."
+- `android.permission.CAMERA`
+- `android.permission.READ_EXTERNAL_STORAGE` / `WRITE_EXTERNAL_STORAGE`
+  (capped at `maxSdkVersion="32"` for legacy storage access)
+- `android.permission.READ_MEDIA_IMAGES` (Android 13+ granular media access)
+- an optional `android.hardware.camera` feature declaration
 
-## What's actually in here
+## CI: debug APK on every push
 
-- `www/` — the same app you already had (unchanged)
-- `android/` — the native Android project Capacitor generated, with the app
-  icon and splash screen re-themed to match Trackia's palette
-- `.github/workflows/build-apk.yml` — builds `android/` into an APK on every
-  push and attaches it to the workflow run
-- `capacitor.config.ts` — app id (`com.trackia.app`) and app name (`Trackia`)
+`.github/workflows/android-debug-apk.yml` runs on every push:
+
+1. `npm ci`
+2. `npm run build`
+3. `npx cap add android` (fresh project, since `android/` isn't committed)
+4. `npx cap sync android`
+5. `node scripts/patch-manifest.js`
+6. `./gradlew assembleDebug`
+7. Uploads the resulting APK as a workflow artifact (`trackia-debug-apk`)
+
+Download it from the **Actions** tab → the workflow run → **Artifacts**.
+
+## Settings
+
+- **Font size** — small / medium / large, applied via a CSS custom property.
+- **Tile size** — small / medium / large, changes the card grid's minimum
+  tile width and cover height.
+- **Theme colors** — hex inputs (+ color pickers) for background, card
+  surface, accent, and text; stored in `localStorage` and applied as CSS
+  variable overrides. "Reset to default theme" clears the overrides.
+- **Backup** — export the full library as a `.json` file, or import one
+  (from Trackia or a compatible export) to merge into the current library.

@@ -1,0 +1,20 @@
+{
+  "appId": "com.trackia.app",
+  "appName": "Trackia",
+  "webDir": "dist",
+  "backgroundColor": "#000000",
+  "android": {
+    "backgroundColor": "#000000",
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "Camera": {
+      "androidScaleType": "CENTER_CROP"
+    },
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "backgroundColor": "#000000",
+      "androidSplashResourceName": "splash"
+    }
+  }
+}

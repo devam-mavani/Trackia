@@ -1,21 +1,22 @@
 {
   "name": "trackia",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Offline-first media tracker — anime, series, movies, books, manga.",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "cap:sync": "cap sync android",
+    "postinstall": "echo 'Trackia web deps installed.'"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "@capacitor/android": "^8.5.1",
-    "@capacitor/camera": "^8.2.4",
-    "@capacitor/cli": "^8.5.1",
-    "@capacitor/core": "^8.5.1"
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/camera": "^6.1.2",
+    "@capacitor/core": "^6.2.0"
   },
   "devDependencies": {
-    "typescript": "^7.0.2"
+    "@capacitor/cli": "^6.2.0",
+    "vite": "^5.4.11"
   }
 }
