@@ -2,12 +2,13 @@ name: Build APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch: {}
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
@@ -16,21 +17,38 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+          java-version: "17"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "20"
+          cache: npm
 
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Build web app
+        run: npm run build
+
+      - name: Add Android platform
+        run: |
+          set -x
+          yes | npx cap add android
+          if [ ! -d "android/app" ]; then
+            echo "::error::android/app was not created by npx cap add android"
+            ls -la android || echo "(no android directory at all)"
+            exit 1
+          fi
+
+      - name: Generate app icon + splash from resources/icon.png
+        run: npx capacitor-assets generate --android
+
       - name: Sync Capacitor Android project
         run: npx cap sync android
+
+      - name: Patch AndroidManifest with camera/storage permissions
+        run: node scripts/patch-manifest.js
 
       - name: Make gradlew executable
         run: chmod +x android/gradlew
@@ -44,3 +62,4 @@ jobs:
         with:
           name: trackia-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
