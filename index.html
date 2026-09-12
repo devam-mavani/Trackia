@@ -69,11 +69,12 @@
         <button class="type-tab" data-type="movie">Movies</button>
         <button class="type-tab" data-type="book">Books</button>
         <button class="type-tab" data-type="manga">Manga</button>
+        <button class="type-tab" data-type="list">List</button>
       </nav>
 
       <!-- Filter row -->
       <div class="filter-row">
-        <select id="statusFilter" class="select">
+        <select id="statusFilter" class="select" data-themed>
           <option value="all">All statuses</option>
           <option value="plan">Plan to start</option>
           <option value="progress">In progress</option>
@@ -81,7 +82,7 @@
           <option value="hold">On hold</option>
           <option value="dropped">Dropped</option>
         </select>
-        <select id="sortSelect" class="select">
+        <select id="sortSelect" class="select" data-themed>
           <option value="recent">Recently updated</option>
           <option value="title">Title A–Z</option>
           <option value="rating">Rating high–low</option>
@@ -140,6 +141,9 @@
               <button type="button" class="btn-ghost" id="coverLinkBtn">
                 From link
               </button>
+              <button type="button" class="btn-ghost" id="coverPasteBtn">
+                Paste image
+              </button>
               <button
                 type="button"
                 class="btn-ghost danger"
@@ -176,12 +180,13 @@
 
           <label class="field">
             <span>Type</span>
-            <select id="f_type" required>
+            <select id="f_type" required data-themed>
               <option value="anime">Anime</option>
               <option value="series">Series</option>
               <option value="movie">Movie</option>
               <option value="book">Book</option>
               <option value="manga">Manga</option>
+              <option value="list">List</option>
             </select>
           </label>
 
@@ -195,7 +200,7 @@
             />
           </label>
 
-          <div class="field-row">
+          <div class="field-row" id="f_progress_row">
             <label class="field">
               <span id="f_progress_label">Progress</span>
               <input type="number" id="f_progress" min="0" step="1" value="0" />
@@ -214,7 +219,7 @@
 
           <label class="field">
             <span>Status</span>
-            <select id="f_status" required>
+            <select id="f_status" required data-themed>
               <option value="plan">Plan to start</option>
               <option value="progress">In progress</option>
               <option value="completed">Completed</option>
@@ -314,7 +319,12 @@
             </p>
             <label class="field" style="margin-bottom: 14px">
               <span>Preset</span>
-              <select id="themePreset" class="select" style="width: 100%">
+              <select
+                id="themePreset"
+                class="select"
+                style="width: 100%"
+                data-themed
+              >
                 <option value="default">Trackia (default)</option>
                 <option value="blood">Blood Moon</option>
                 <option value="midnight">Midnight Blue</option>

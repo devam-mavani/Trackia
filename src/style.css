@@ -215,6 +215,125 @@ textarea:focus-visible {
   min-width: 0;
 }
 
+/* ---------- Themed dropdown (replaces native <select> UI) ---------- */
+.tselect {
+  position: relative;
+}
+.tselect.select {
+  padding: 0;
+}
+.tselect.select .tselect-trigger {
+  padding: 9px 10px;
+}
+.field .tselect {
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+}
+
+.tselect-native {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.tselect-trigger {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  color: var(--c-text);
+  font: inherit;
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+.tselect-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.tselect.select .tselect-trigger {
+  font-size: 0.82rem;
+}
+
+.tselect-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tselect-chevron {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: var(--c-text-dim);
+  transition: transform 0.15s ease;
+}
+.tselect.is-open .tselect-chevron {
+  transform: rotate(180deg);
+}
+
+.tselect-menu {
+  outline: none;
+  position: fixed;
+  z-index: 300;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  min-width: 160px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
+}
+.tselect-menu.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.tselect-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  color: var(--c-text);
+  cursor: pointer;
+}
+.tselect-option.is-focus {
+  background: var(--c-surface-2);
+}
+.tselect-option.is-selected {
+  color: var(--c-accent);
+  font-weight: 700;
+}
+.tselect-option.is-selected::after {
+  content: "✓";
+  font-weight: 700;
+}
+.tselect-option.is-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ---------- Grid & cards ---------- */
 .grid {
   display: grid;
@@ -235,6 +354,49 @@ textarea:focus-visible {
 }
 .card:active {
   transform: scale(0.98);
+}
+
+/* ---------- List-type entries: horizontal title strip ---------- */
+.card.list-item {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+  border-left: 3px solid var(--c-accent);
+}
+
+.list-item-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: 0.98rem;
+  font-weight: 700;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-item-tags {
+  display: flex;
+  gap: 6px;
+  flex: none;
+  max-width: 35%;
+  overflow: hidden;
+}
+.list-item-tags .chip {
+  white-space: nowrap;
+}
+
+.list-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.list-item-meta .card-status {
+  white-space: nowrap;
 }
 
 .card-cover {

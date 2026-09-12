@@ -1,6 +1,7 @@
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
+import { initThemedSelects, syncThemedSelect } from './themedSelect.js';
 
 /* ---------------------------------------------------------------------- */
 /*  Storage                                                                */
@@ -17,7 +18,7 @@ const UNIT_BY_TYPE = {
   manga: 'chapters',
 };
 
-const TYPE_LABEL = { anime: 'Anime', series: 'Series', movie: 'Movie', book: 'Book', manga: 'Manga' };
+const TYPE_LABEL = { anime: 'Anime', series: 'Series', movie: 'Movie', book: 'Book', manga: 'Manga', list: 'List' };
 const STATUS_LABEL = {
   plan: 'Plan to start',
   progress: 'In progress',
@@ -112,6 +113,7 @@ function applySettings() {
   });
 
   $('#themePreset').value = detectPreset();
+  syncThemedSelect($('#themePreset'));
 }
 
 /* ---------------------------------------------------------------------- */
@@ -172,6 +174,8 @@ function render() {
 }
 
 function renderCard(e) {
+  if (e.type === 'list') return renderListItem(e);
+
   const card = document.createElement('article');
   card.className = 'card';
   card.dataset.id = e.id;
@@ -274,6 +278,50 @@ function renderCard(e) {
   return card;
 }
 
+/** List-type entries render as a plain full-width title strip instead of a
+ *  cover card — no cover art, no progress bar, just the title and a bit of
+ *  status/rating/tag context on one line. */
+function renderListItem(e) {
+  const row = document.createElement('article');
+  row.className = 'card list-item';
+  row.dataset.id = e.id;
+
+  const title = document.createElement('h3');
+  title.className = 'list-item-title';
+  title.textContent = e.title;
+  row.appendChild(title);
+
+  if (e.tags && e.tags.length) {
+    const tagRow = document.createElement('div');
+    tagRow.className = 'list-item-tags';
+    e.tags.slice(0, 3).forEach((t) => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = t;
+      tagRow.appendChild(chip);
+    });
+    row.appendChild(tagRow);
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'list-item-meta';
+  if (e.rating) {
+    const rating = document.createElement('span');
+    rating.className = 'badge badge-rating';
+    rating.textContent = `★ ${e.rating}`;
+    meta.appendChild(rating);
+  }
+  const status = document.createElement('span');
+  status.className = 'card-status';
+  status.textContent = STATUS_LABEL[e.status] || e.status;
+  meta.appendChild(status);
+  row.appendChild(meta);
+
+  row.addEventListener('click', () => openEntrySheet(e.id));
+
+  return row;
+}
+
 function bumpProgress(id) {
   const e = entries.find((x) => x.id === id);
   if (!e) return;
@@ -359,6 +407,7 @@ const f_title = $('#f_title');
 const f_type = $('#f_type');
 const f_season_field = $('#f_season_field');
 const f_season = $('#f_season');
+const f_progress_row = $('#f_progress_row');
 const f_progress = $('#f_progress');
 const f_total = $('#f_total');
 const f_progress_label = $('#f_progress_label');
@@ -373,11 +422,22 @@ const deleteEntryBtn = $('#deleteEntryBtn');
 const coverImg = $('#coverImg');
 const coverInitial = $('#coverInitial');
 const coverClearBtn = $('#coverClearBtn');
+const coverPicker = $('#coverPicker');
 
 function updateUnitLabels() {
-  const unit = UNIT_BY_TYPE[f_type.value] || 'progress';
-  const isSeasonType = f_type.value === 'anime' || f_type.value === 'series';
+  const type = f_type.value;
+  const unit = UNIT_BY_TYPE[type] || 'progress';
+  const isSeasonType = type === 'anime' || type === 'series';
+  const isListType = type === 'list';
+
   f_season_field.style.display = isSeasonType ? '' : 'none';
+  f_progress_row.style.display = isListType ? 'none' : '';
+  coverPicker.style.display = isListType ? 'none' : '';
+  if (isListType) {
+    coverLinkRow.hidden = true;
+    setCoverPreview(null);
+  }
+
   if (unit === 'watch') {
     f_progress_label.textContent = 'Watched';
     f_total_label.textContent = 'Total (optional)';
@@ -480,6 +540,54 @@ coverLinkInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); useCoverLink(); }
 });
 
+/* ---- Cover from clipboard ---- */
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function useClipboardImage(clipboardItems) {
+  for (const item of clipboardItems) {
+    const type = item.types ? item.types.find((t) => t.startsWith('image/')) : item.type;
+    if (!type || !type.startsWith('image/')) continue;
+    const blob = item.getType ? await item.getType(type) : item.getAsFile();
+    if (!blob) continue;
+    setCoverPreview(await blobToDataUrl(blob));
+    return true;
+  }
+  return false;
+}
+
+$('#coverPasteBtn').addEventListener('click', async () => {
+  if (f_type.value === 'list') return;
+  if (!navigator.clipboard || !navigator.clipboard.read) {
+    showToast('Press Ctrl+V (or Cmd+V) anywhere in this form to paste an image');
+    return;
+  }
+  try {
+    const items = await navigator.clipboard.read();
+    const found = await useClipboardImage(items);
+    if (!found) showToast('No image found on the clipboard');
+  } catch (err) {
+    showToast('Could not read the clipboard — try Ctrl+V instead');
+  }
+});
+
+// Lets you paste an image straight into the sheet (Ctrl/Cmd+V) without
+// touching the "Paste image" button — works wherever the browser fires a
+// native clipboard paste event.
+entrySheet.addEventListener('paste', async (e) => {
+  if (f_type.value === 'list') return;
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items || !items.length) return;
+  const found = await useClipboardImage(Array.from(items));
+  if (found) e.preventDefault();
+});
+
 /* ---- Cover picker: official @capacitor/camera plugin ---- */
 $('#coverPickBtn').addEventListener('click', async () => {
   try {
@@ -526,6 +634,8 @@ function resetForm() {
   f_rating_val.textContent = '—';
   renderTagChips();
   updateUnitLabels();
+  syncThemedSelect(f_type);
+  syncThemedSelect(f_status);
   deleteEntryBtn.hidden = true;
   $('#sheetTitle').textContent = 'New entry';
 }
@@ -549,6 +659,8 @@ function openEntrySheet(id) {
       setCoverPreview(e.cover || null, e.title);
       renderTagChips();
       updateUnitLabels();
+      syncThemedSelect(f_type);
+      syncThemedSelect(f_status);
       deleteEntryBtn.hidden = false;
       $('#sheetTitle').textContent = 'Edit entry';
     }
@@ -755,7 +867,7 @@ $('#importFile').addEventListener('change', async (e) => {
       entries.push({
         id,
         title: raw.title || 'Untitled',
-        type: UNIT_BY_TYPE[raw.type] ? raw.type : 'anime',
+        type: TYPE_LABEL[raw.type] ? raw.type : 'anime',
         season: raw.season || '',
         progress: Number(raw.progress) || 0,
         total: raw.total == null ? null : Number(raw.total),
@@ -834,6 +946,7 @@ if (brandLogo) {
   });
 }
 
+initThemedSelects();
 applySettings();
 updateUnitLabels();
 render();
