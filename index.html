@@ -1,245 +1,403 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-  <meta name="theme-color" content="#000000" />
-  <title>Trackia</title>
-  <link rel="stylesheet" href="/src/style.css" />
-</head>
-<body>
-  <div id="app">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    />
+    <meta name="theme-color" content="#000000" />
+    <title>Trackia</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Top bar -->
+      <header class="topbar">
+        <div class="brand-wrap">
+          <img
+            src="/src/assets/logo.jpg"
+            alt=""
+            class="brand-logo"
+            id="brandLogo"
+          />
+          <h1 class="brand">Trackia</h1>
+        </div>
+        <div class="topbar-actions">
+          <button
+            class="icon-btn"
+            id="searchToggle"
+            aria-label="Search"
+            title="Search"
+          >
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M10.5 3a7.5 7.5 0 015.916 12.12l4.732 4.732-1.06 1.06-4.732-4.731A7.5 7.5 0 1110.5 3zm0 1.5a6 6 0 100 12 6 6 0 000-12z"
+              />
+            </svg>
+          </button>
+          <button
+            class="icon-btn"
+            id="menuToggle"
+            aria-label="Menu"
+            title="Menu"
+          >
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M3 6h18v1.5H3V6zm0 5.25h18v1.5H3v-1.5zM3 16.5h18V18H3v-1.5z"
+              />
+            </svg>
+          </button>
+        </div>
+      </header>
 
-    <!-- Top bar -->
-    <header class="topbar">
-      <h1 class="brand">Trackia</h1>
-      <div class="topbar-actions">
-        <button class="icon-btn" id="searchToggle" aria-label="Search" title="Search">
-          <svg viewBox="0 0 24 24"><path d="M10.5 3a7.5 7.5 0 015.916 12.12l4.732 4.732-1.06 1.06-4.732-4.731A7.5 7.5 0 1110.5 3zm0 1.5a6 6 0 100 12 6 6 0 000-12z"/></svg>
-        </button>
-        <button class="icon-btn" id="menuToggle" aria-label="Menu" title="Menu">
-          <svg viewBox="0 0 24 24"><path d="M3 6h18v1.5H3V6zm0 5.25h18v1.5H3v-1.5zM3 16.5h18V18H3v-1.5z"/></svg>
-        </button>
-      </div>
-    </header>
-
-    <!-- Search bar (collapsible) -->
-    <div class="searchbar" id="searchBar" hidden>
-      <input type="search" id="searchInput" placeholder="Search title, tag, notes…" autocomplete="off" />
-    </div>
-
-    <!-- Type filter tabs -->
-    <nav class="type-tabs" id="typeTabs">
-      <button class="type-tab active" data-type="all">All</button>
-      <button class="type-tab" data-type="anime">Anime</button>
-      <button class="type-tab" data-type="series">Series</button>
-      <button class="type-tab" data-type="movie">Movies</button>
-      <button class="type-tab" data-type="book">Books</button>
-      <button class="type-tab" data-type="manga">Manga</button>
-    </nav>
-
-    <!-- Filter row -->
-    <div class="filter-row">
-      <select id="statusFilter" class="select">
-        <option value="all">All statuses</option>
-        <option value="plan">Plan to start</option>
-        <option value="progress">In progress</option>
-        <option value="completed">Completed</option>
-        <option value="hold">On hold</option>
-        <option value="dropped">Dropped</option>
-      </select>
-      <select id="sortSelect" class="select">
-        <option value="recent">Recently updated</option>
-        <option value="title">Title A–Z</option>
-        <option value="rating">Rating high–low</option>
-        <option value="progress">Progress high–low</option>
-      </select>
-    </div>
-
-    <!-- Card grid -->
-    <main class="grid" id="grid"></main>
-
-    <!-- Empty state -->
-    <div class="empty-state" id="emptyState" hidden>
-      <p class="empty-title">Nothing here yet</p>
-      <p class="empty-sub">Add something you're watching, reading, or planning to start.</p>
-    </div>
-
-    <!-- FAB tab + plus -->
-    <div class="fab-wrap">
-      <button class="fab-tab" id="fabTab" aria-label="Quick add tab"></button>
-      <button class="fab" id="fabAdd" aria-label="Add entry">
-        <svg viewBox="0 0 24 24"><path d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7V4z"/></svg>
-      </button>
-    </div>
-
-    <!-- Backdrop -->
-    <div class="backdrop" id="backdrop" hidden></div>
-
-    <!-- Bottom sheet: add/edit entry -->
-    <section class="sheet" id="entrySheet" hidden>
-      <div class="sheet-handle" id="sheetHandle"><span></span></div>
-      <div class="sheet-head">
-        <h2 id="sheetTitle">New entry</h2>
-        <button class="icon-btn" id="sheetClose" aria-label="Close">
-          <svg viewBox="0 0 24 24"><path d="M6.4 5L5 6.4l5.6 5.6L5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6 6.4 5z"/></svg>
-        </button>
+      <!-- Search bar (collapsible) -->
+      <div class="searchbar" id="searchBar" hidden>
+        <input
+          type="search"
+          id="searchInput"
+          placeholder="Search title, tag, notes…"
+          autocomplete="off"
+        />
       </div>
 
-      <form id="entryForm" class="sheet-body">
-        <div class="cover-picker" id="coverPicker">
-          <div class="cover-preview" id="coverPreview">
-            <span id="coverInitial">+</span>
-            <img id="coverImg" alt="" hidden />
-          </div>
-          <div class="cover-actions">
-            <button type="button" class="btn-ghost" id="coverPickBtn">Choose cover</button>
-            <button type="button" class="btn-ghost" id="coverLinkBtn">From link</button>
-            <button type="button" class="btn-ghost danger" id="coverClearBtn" hidden>Remove</button>
-          </div>
+      <!-- Type filter tabs -->
+      <nav class="type-tabs" id="typeTabs">
+        <button class="type-tab active" data-type="all">All</button>
+        <button class="type-tab" data-type="anime">Anime</button>
+        <button class="type-tab" data-type="series">Series</button>
+        <button class="type-tab" data-type="movie">Movies</button>
+        <button class="type-tab" data-type="book">Books</button>
+        <button class="type-tab" data-type="manga">Manga</button>
+      </nav>
+
+      <!-- Filter row -->
+      <div class="filter-row">
+        <select id="statusFilter" class="select">
+          <option value="all">All statuses</option>
+          <option value="plan">Plan to start</option>
+          <option value="progress">In progress</option>
+          <option value="completed">Completed</option>
+          <option value="hold">On hold</option>
+          <option value="dropped">Dropped</option>
+        </select>
+        <select id="sortSelect" class="select">
+          <option value="recent">Recently updated</option>
+          <option value="title">Title A–Z</option>
+          <option value="rating">Rating high–low</option>
+          <option value="progress">Progress high–low</option>
+        </select>
+      </div>
+
+      <!-- Card grid -->
+      <main class="grid" id="grid"></main>
+
+      <!-- Empty state -->
+      <div class="empty-state" id="emptyState" hidden>
+        <p class="empty-title">Nothing here yet</p>
+        <p class="empty-sub">
+          Add something you're watching, reading, or planning to start.
+        </p>
+      </div>
+
+      <!-- FAB tab + plus -->
+      <div class="fab-wrap">
+        <button class="fab-tab" id="fabTab" aria-label="Quick add tab"></button>
+        <button class="fab" id="fabAdd" aria-label="Add entry">
+          <svg viewBox="0 0 24 24">
+            <path d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7V4z" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Backdrop -->
+      <div class="backdrop" id="backdrop" hidden></div>
+
+      <!-- Bottom sheet: add/edit entry -->
+      <section class="sheet" id="entrySheet" hidden>
+        <div class="sheet-handle" id="sheetHandle"><span></span></div>
+        <div class="sheet-head">
+          <h2 id="sheetTitle">New entry</h2>
+          <button class="icon-btn" id="sheetClose" aria-label="Close">
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M6.4 5L5 6.4l5.6 5.6L5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6 6.4 5z"
+              />
+            </svg>
+          </button>
         </div>
 
-        <div class="cover-link-row" id="coverLinkRow" hidden>
-          <input type="url" id="coverLinkInput" placeholder="https://example.com/cover.jpg" inputmode="url" />
-          <button type="button" class="btn-ghost" id="coverLinkUseBtn">Use</button>
-        </div>
+        <form id="entryForm" class="sheet-body">
+          <div class="cover-picker" id="coverPicker">
+            <div class="cover-preview" id="coverPreview">
+              <span id="coverInitial">+</span>
+              <img id="coverImg" alt="" hidden />
+            </div>
+            <div class="cover-actions">
+              <button type="button" class="btn-ghost" id="coverPickBtn">
+                Choose cover
+              </button>
+              <button type="button" class="btn-ghost" id="coverLinkBtn">
+                From link
+              </button>
+              <button
+                type="button"
+                class="btn-ghost danger"
+                id="coverClearBtn"
+                hidden
+              >
+                Remove
+              </button>
+            </div>
+          </div>
 
-        <label class="field">
-          <span>Title</span>
-          <input type="text" id="f_title" required maxlength="200" placeholder="e.g. Frieren: Beyond Journey's End" />
-        </label>
+          <div class="cover-link-row" id="coverLinkRow" hidden>
+            <input
+              type="url"
+              id="coverLinkInput"
+              placeholder="https://example.com/cover.jpg"
+              inputmode="url"
+            />
+            <button type="button" class="btn-ghost" id="coverLinkUseBtn">
+              Use
+            </button>
+          </div>
 
-        <label class="field">
-          <span>Type</span>
-          <select id="f_type" required>
-            <option value="anime">Anime</option>
-            <option value="series">Series</option>
-            <option value="movie">Movie</option>
-            <option value="book">Book</option>
-            <option value="manga">Manga</option>
-          </select>
-        </label>
-
-        <label class="field" id="f_season_field">
-          <span>Season</span>
-          <input type="text" id="f_season" maxlength="60" placeholder="e.g. Season 2" />
-        </label>
-
-        <div class="field-row">
           <label class="field">
-            <span id="f_progress_label">Progress</span>
-            <input type="number" id="f_progress" min="0" step="1" value="0" />
+            <span>Title</span>
+            <input
+              type="text"
+              id="f_title"
+              required
+              maxlength="200"
+              placeholder="e.g. Frieren: Beyond Journey's End"
+            />
           </label>
+
           <label class="field">
-            <span id="f_total_label">Total (optional)</span>
-            <input type="number" id="f_total" min="0" step="1" placeholder="—" />
-          </label>
-        </div>
-
-        <label class="field">
-          <span>Status</span>
-          <select id="f_status" required>
-            <option value="plan">Plan to start</option>
-            <option value="progress">In progress</option>
-            <option value="completed">Completed</option>
-            <option value="hold">On hold</option>
-            <option value="dropped">Dropped</option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span>Rating <em id="f_rating_val">—</em></span>
-          <input type="range" id="f_rating" min="0" max="10" step="1" value="0" />
-        </label>
-
-        <label class="field">
-          <span>Notes</span>
-          <textarea id="f_notes" rows="3" maxlength="2000" placeholder="Thoughts, reminders…"></textarea>
-        </label>
-
-        <label class="field">
-          <span>Tags</span>
-          <div class="tag-input-wrap">
-            <div class="chip-row" id="tagChips"></div>
-            <input type="text" id="f_tagInput" placeholder="Type a tag, press Enter" maxlength="24" />
-          </div>
-        </label>
-
-        <div class="sheet-actions">
-          <button type="button" class="btn-ghost danger" id="deleteEntryBtn" hidden>Delete</button>
-          <button type="submit" class="btn-primary" id="saveEntryBtn">Save entry</button>
-        </div>
-      </form>
-    </section>
-
-    <!-- Settings / menu drawer -->
-    <section class="sheet" id="menuSheet" hidden>
-      <div class="sheet-handle" id="menuHandle"><span></span></div>
-      <div class="sheet-head">
-        <h2>Settings</h2>
-        <button class="icon-btn" id="menuClose" aria-label="Close">
-          <svg viewBox="0 0 24 24"><path d="M6.4 5L5 6.4l5.6 5.6L5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6 6.4 5z"/></svg>
-        </button>
-      </div>
-
-      <div class="sheet-body">
-        <div class="settings-group">
-          <h3>Font size</h3>
-          <div class="segmented" id="fontSizeSeg">
-            <button data-val="small">Small</button>
-            <button data-val="medium" class="active">Medium</button>
-            <button data-val="large">Large</button>
-          </div>
-        </div>
-
-        <div class="settings-group">
-          <h3>Tile size</h3>
-          <div class="segmented" id="tileSizeSeg">
-            <button data-val="small">Small</button>
-            <button data-val="medium" class="active">Medium</button>
-            <button data-val="large">Large</button>
-          </div>
-        </div>
-
-        <div class="settings-group">
-          <h3>Theme colors</h3>
-          <p class="settings-hint">Pick a preset, or set any hex value for full control.</p>
-          <label class="field" style="margin-bottom: 14px;">
-            <span>Preset</span>
-            <select id="themePreset" class="select" style="width: 100%;">
-              <option value="default">Trackia (default)</option>
-              <option value="blood">Blood Moon</option>
-              <option value="midnight">Midnight Blue</option>
-              <option value="forest">Forest</option>
-              <option value="sunset">Sunset</option>
-              <option value="mono">Mono</option>
-              <option value="custom" disabled>Custom</option>
+            <span>Type</span>
+            <select id="f_type" required>
+              <option value="anime">Anime</option>
+              <option value="series">Series</option>
+              <option value="movie">Movie</option>
+              <option value="book">Book</option>
+              <option value="manga">Manga</option>
             </select>
           </label>
-          <div class="color-row" data-key="bg"><span>Background</span><input type="text" class="hex-input" data-var="--c-bg" placeholder="#000000"><input type="color" class="color-swatch" data-var="--c-bg"></div>
-          <div class="color-row" data-key="surface"><span>Card surface</span><input type="text" class="hex-input" data-var="--c-surface" placeholder="#121212"><input type="color" class="color-swatch" data-var="--c-surface"></div>
-          <div class="color-row" data-key="accent"><span>Accent</span><input type="text" class="hex-input" data-var="--c-accent" placeholder="#e60000"><input type="color" class="color-swatch" data-var="--c-accent"></div>
-          <div class="color-row" data-key="text"><span>Text</span><input type="text" class="hex-input" data-var="--c-text" placeholder="#ffffff"><input type="color" class="color-swatch" data-var="--c-text"></div>
-          <button class="btn-ghost" id="resetThemeBtn">Reset to default theme</button>
-        </div>
 
-        <div class="settings-group">
-          <h3>Backup</h3>
-          <p class="settings-hint">Export your library as a JSON file, or import one from another device.</p>
-          <div class="btn-row">
-            <button class="btn-ghost" id="exportBtn">Export JSON</button>
-            <button class="btn-ghost" id="importBtn">Import JSON</button>
-            <input type="file" id="importFile" accept="application/json" hidden />
+          <label class="field" id="f_season_field">
+            <span>Season</span>
+            <input
+              type="text"
+              id="f_season"
+              maxlength="60"
+              placeholder="e.g. Season 2"
+            />
+          </label>
+
+          <div class="field-row">
+            <label class="field">
+              <span id="f_progress_label">Progress</span>
+              <input type="number" id="f_progress" min="0" step="1" value="0" />
+            </label>
+            <label class="field">
+              <span id="f_total_label">Total (optional)</span>
+              <input
+                type="number"
+                id="f_total"
+                min="0"
+                step="1"
+                placeholder="—"
+              />
+            </label>
           </div>
+
+          <label class="field">
+            <span>Status</span>
+            <select id="f_status" required>
+              <option value="plan">Plan to start</option>
+              <option value="progress">In progress</option>
+              <option value="completed">Completed</option>
+              <option value="hold">On hold</option>
+              <option value="dropped">Dropped</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Rating <em id="f_rating_val">—</em></span>
+            <input
+              type="range"
+              id="f_rating"
+              min="0"
+              max="10"
+              step="1"
+              value="0"
+            />
+          </label>
+
+          <label class="field">
+            <span>Notes</span>
+            <textarea
+              id="f_notes"
+              rows="3"
+              maxlength="2000"
+              placeholder="Thoughts, reminders…"
+            ></textarea>
+          </label>
+
+          <label class="field">
+            <span>Tags</span>
+            <div class="tag-input-wrap">
+              <div class="chip-row" id="tagChips"></div>
+              <input
+                type="text"
+                id="f_tagInput"
+                placeholder="Type a tag, press Enter"
+                maxlength="24"
+              />
+            </div>
+          </label>
+
+          <div class="sheet-actions">
+            <button
+              type="button"
+              class="btn-ghost danger"
+              id="deleteEntryBtn"
+              hidden
+            >
+              Delete
+            </button>
+            <button type="submit" class="btn-primary" id="saveEntryBtn">
+              Save entry
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Settings / menu drawer -->
+      <section class="sheet" id="menuSheet" hidden>
+        <div class="sheet-handle" id="menuHandle"><span></span></div>
+        <div class="sheet-head">
+          <h2>Settings</h2>
+          <button class="icon-btn" id="menuClose" aria-label="Close">
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M6.4 5L5 6.4l5.6 5.6L5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6 6.4 5z"
+              />
+            </svg>
+          </button>
         </div>
 
-        <p class="version-tag">Trackia · offline-first tracker</p>
-      </div>
-    </section>
+        <div class="sheet-body">
+          <div class="settings-group">
+            <h3>Font size</h3>
+            <div class="segmented" id="fontSizeSeg">
+              <button data-val="small">Small</button>
+              <button data-val="medium" class="active">Medium</button>
+              <button data-val="large">Large</button>
+            </div>
+          </div>
 
-    <div class="toast" id="toast" hidden></div>
-  </div>
+          <div class="settings-group">
+            <h3>Tile size</h3>
+            <div class="segmented" id="tileSizeSeg">
+              <button data-val="small">Small</button>
+              <button data-val="medium" class="active">Medium</button>
+              <button data-val="large">Large</button>
+            </div>
+          </div>
 
-  <script type="module" src="/src/main.js"></script>
-</body>
+          <div class="settings-group">
+            <h3>Theme colors</h3>
+            <p class="settings-hint">
+              Pick a preset, or set any hex value for full control.
+            </p>
+            <label class="field" style="margin-bottom: 14px">
+              <span>Preset</span>
+              <select id="themePreset" class="select" style="width: 100%">
+                <option value="default">Trackia (default)</option>
+                <option value="blood">Blood Moon</option>
+                <option value="midnight">Midnight Blue</option>
+                <option value="forest">Forest</option>
+                <option value="sunset">Sunset</option>
+                <option value="mono">Mono</option>
+                <option value="custom" disabled>Custom</option>
+              </select>
+            </label>
+            <div class="color-row" data-key="bg">
+              <span>Background</span
+              ><input
+                type="text"
+                class="hex-input"
+                data-var="--c-bg"
+                placeholder="#000000"
+              /><input type="color" class="color-swatch" data-var="--c-bg" />
+            </div>
+            <div class="color-row" data-key="surface">
+              <span>Card surface</span
+              ><input
+                type="text"
+                class="hex-input"
+                data-var="--c-surface"
+                placeholder="#121212"
+              /><input
+                type="color"
+                class="color-swatch"
+                data-var="--c-surface"
+              />
+            </div>
+            <div class="color-row" data-key="accent">
+              <span>Accent</span
+              ><input
+                type="text"
+                class="hex-input"
+                data-var="--c-accent"
+                placeholder="#e60000"
+              /><input
+                type="color"
+                class="color-swatch"
+                data-var="--c-accent"
+              />
+            </div>
+            <div class="color-row" data-key="text">
+              <span>Text</span
+              ><input
+                type="text"
+                class="hex-input"
+                data-var="--c-text"
+                placeholder="#ffffff"
+              /><input type="color" class="color-swatch" data-var="--c-text" />
+            </div>
+            <button class="btn-ghost" id="resetThemeBtn">
+              Reset to default theme
+            </button>
+          </div>
+
+          <div class="settings-group">
+            <h3>Backup</h3>
+            <p class="settings-hint">
+              Export your library as a JSON file, or import one from another
+              device.
+            </p>
+            <div class="btn-row">
+              <button class="btn-ghost" id="exportBtn">Export JSON</button>
+              <button class="btn-ghost" id="importBtn">Import JSON</button>
+              <input
+                type="file"
+                id="importFile"
+                accept="application/json"
+                hidden
+              />
+            </div>
+          </div>
+
+          <p class="version-tag">Trackia · offline-first tracker</p>
+        </div>
+      </section>
+
+      <div class="toast" id="toast" hidden></div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
 </html>
