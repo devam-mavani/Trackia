@@ -86,6 +86,8 @@ const backdrop = $('#backdrop');
 
 const entrySheet = $('#entrySheet');
 const menuSheet = $('#menuSheet');
+const detailSheet = $('#detailSheet');
+const ALL_SHEETS = [entrySheet, menuSheet, detailSheet];
 
 /* ---------------------------------------------------------------------- */
 /*  Init settings application                                              */
@@ -168,9 +170,12 @@ function render() {
   grid.innerHTML = '';
   emptyState.hidden = list.length !== 0;
 
-  for (const e of list) {
-    grid.appendChild(renderCard(e));
-  }
+  list.forEach((e, idx) => {
+    const card = renderCard(e);
+    // Gentle cascading fade-in, capped so long lists don't feel sluggish.
+    card.style.animationDelay = `${Math.min(idx, 16) * 22}ms`;
+    grid.appendChild(card);
+  });
 }
 
 function renderCard(e) {
@@ -273,7 +278,7 @@ function renderCard(e) {
   card.appendChild(cover);
   card.appendChild(body);
 
-  card.addEventListener('click', () => openEntrySheet(e.id));
+  card.addEventListener('click', () => openDetailSheet(e.id));
 
   return card;
 }
@@ -317,7 +322,7 @@ function renderListItem(e) {
   meta.appendChild(status);
   row.appendChild(meta);
 
-  row.addEventListener('click', () => openEntrySheet(e.id));
+  row.addEventListener('click', () => openDetailSheet(e.id));
 
   return row;
 }
@@ -336,24 +341,155 @@ function bumpProgress(id) {
 }
 
 /* ---------------------------------------------------------------------- */
+/*  Detail sheet (title card)                                              */
+/* ---------------------------------------------------------------------- */
+
+let detailId = null;
+
+const detailCover = $('#detailCover');
+const detailCoverImg = $('#detailCoverImg');
+const detailCoverInitial = $('#detailCoverInitial');
+const detailBadges = $('#detailBadges');
+const detailTitle = $('#detailTitle');
+const detailMeta = $('#detailMeta');
+const detailProgressWrap = $('#detailProgressWrap');
+const detailProgressFill = $('#detailProgressFill');
+const detailProgressLabel = $('#detailProgressLabel');
+const detailBumpBtn = $('#detailBumpBtn');
+const detailTags = $('#detailTags');
+const detailNotesWrap = $('#detailNotesWrap');
+const detailNotes = $('#detailNotes');
+
+function openDetailSheet(id) {
+  const e = entries.find((x) => x.id === id);
+  if (!e) return;
+  detailId = id;
+
+  // Cover
+  if (e.cover) {
+    detailCoverImg.src = e.cover;
+    detailCoverImg.hidden = false;
+    detailCoverInitial.hidden = true;
+    detailCoverImg.onerror = () => {
+      detailCoverImg.hidden = true;
+      detailCoverInitial.hidden = false;
+    };
+  } else {
+    detailCoverImg.hidden = true;
+    detailCoverImg.src = '';
+    detailCoverInitial.hidden = false;
+  }
+  detailCoverInitial.textContent = initials(e.title);
+  detailCover.style.background = e.cover ? 'transparent' : colorForString(e.title || e.id);
+  detailCover.hidden = e.type === 'list';
+
+  // Badges
+  detailBadges.innerHTML = `
+    <span class="badge badge-type">${escapeHtml(TYPE_LABEL[e.type] || e.type)}</span>
+    <span class="badge badge-status">${escapeHtml(STATUS_LABEL[e.status] || e.status)}</span>
+    ${e.rating ? `<span class="badge badge-rating">★ ${e.rating}</span>` : ''}
+  `;
+
+  // Title & meta (season, if any)
+  detailTitle.textContent = e.title;
+  if (e.season) {
+    detailMeta.textContent = e.season;
+    detailMeta.hidden = false;
+  } else {
+    detailMeta.hidden = true;
+  }
+
+  // Progress
+  const unit = UNIT_BY_TYPE[e.type] || 'progress';
+  if (e.type === 'list') {
+    detailProgressWrap.hidden = true;
+  } else {
+    detailProgressWrap.hidden = false;
+    const pct = e.total
+      ? Math.min(100, Math.round((e.progress / e.total) * 100))
+      : (e.status === 'completed' ? 100 : 0);
+    detailProgressFill.style.width = pct + '%';
+    detailProgressLabel.textContent = e.total
+      ? `${e.progress} / ${e.total} ${unit}`
+      : `${e.progress} ${unit}`;
+    detailBumpBtn.hidden = e.status !== 'progress';
+  }
+
+  // Tags (free-text, shown as chips)
+  detailTags.innerHTML = '';
+  const hasTags = e.tags && e.tags.length;
+  detailTags.hidden = !hasTags;
+  if (hasTags) {
+    e.tags.forEach((t) => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = t;
+      detailTags.appendChild(chip);
+    });
+  }
+
+  // Notes
+  if (e.notes) {
+    detailNotesWrap.hidden = false;
+    detailNotes.textContent = e.notes;
+  } else {
+    detailNotesWrap.hidden = true;
+  }
+
+  openSheet(detailSheet);
+}
+
+$('#detailClose').addEventListener('click', () => closeSheet(detailSheet));
+
+$('#detailBumpBtn').addEventListener('click', () => {
+  if (!detailId) return;
+  bumpProgress(detailId);
+  openDetailSheet(detailId); // refresh the numbers/progress bar in place
+});
+
+$('#detailEditBtn').addEventListener('click', () => {
+  const id = detailId;
+  closeSheet(detailSheet);
+  setTimeout(() => openEntrySheet(id), 260);
+});
+
+$('#detailDeleteBtn').addEventListener('click', () => {
+  if (!detailId) return;
+  if (!confirm('Delete this entry? This cannot be undone.')) return;
+  entries = entries.filter((x) => x.id !== detailId);
+  saveEntries(entries);
+  render();
+  closeSheet(detailSheet);
+  showToast('Entry deleted');
+});
+
+/* ---------------------------------------------------------------------- */
 /*  Sheets: generic open/close with swipe-to-close                         */
 /* ---------------------------------------------------------------------- */
 
 function openSheet(sheetEl) {
-  backdrop.hidden = false;
-  sheetEl.hidden = false;
-  sheetEl.classList.remove('closing');
   document.body.style.overflow = 'hidden';
+
+  backdrop.hidden = false;
+  void backdrop.offsetWidth; // force reflow so the opacity transition runs
+  backdrop.classList.add('visible');
+
+  sheetEl.hidden = false;
+  sheetEl.classList.remove('closing', 'open');
+  void sheetEl.offsetWidth; // force reflow so the slide-up transition runs
+  sheetEl.classList.add('open');
 }
 
 function closeSheet(sheetEl) {
+  sheetEl.classList.remove('open');
   sheetEl.classList.add('closing');
-  backdrop.hidden = true;
+  backdrop.classList.remove('visible');
   document.body.style.overflow = '';
   setTimeout(() => {
     sheetEl.hidden = true;
     sheetEl.classList.remove('closing');
-  }, 220);
+    if (ALL_SHEETS.every((s) => s.hidden)) backdrop.hidden = true;
+  }, 380);
 }
 
 function wireSwipeToClose(handleEl, sheetEl, onClose) {
@@ -393,10 +529,12 @@ function wireSwipeToClose(handleEl, sheetEl, onClose) {
 backdrop.addEventListener('click', () => {
   if (!entrySheet.hidden) closeSheet(entrySheet);
   if (!menuSheet.hidden) closeSheet(menuSheet);
+  if (!detailSheet.hidden) closeSheet(detailSheet);
 });
 
 wireSwipeToClose($('#sheetHandle'), entrySheet, () => closeSheet(entrySheet));
 wireSwipeToClose($('#menuHandle'), menuSheet, () => closeSheet(menuSheet));
+wireSwipeToClose($('#detailHandle'), detailSheet, () => closeSheet(detailSheet));
 
 /* ---------------------------------------------------------------------- */
 /*  Entry form                                                             */
@@ -924,12 +1062,19 @@ $('#sortSelect').addEventListener('change', (e) => { state.sort = e.target.value
 /* ---------------------------------------------------------------------- */
 
 let toastTimer = null;
+let toastHideTimer = null;
 function showToast(msg) {
   const el = $('#toast');
+  clearTimeout(toastTimer);
+  clearTimeout(toastHideTimer);
   el.textContent = msg;
   el.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, 2200);
+  void el.offsetWidth; // force reflow so the fade-in transition runs
+  el.classList.add('visible');
+  toastTimer = setTimeout(() => {
+    el.classList.remove('visible');
+    toastHideTimer = setTimeout(() => { el.hidden = true; }, 300);
+  }, 2200);
 }
 
 /* ---------------------------------------------------------------------- */
