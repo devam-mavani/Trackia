@@ -7,10 +7,11 @@
   --c-text-dim: #9a9a9a;
   --c-border: #262626;
 
-  --font-display: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --font-display: "Outfit Variable", "Outfit", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-body:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
-    sans-serif;
+    "Outfit Variable", "Outfit", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
 
   --fs-base: 15px;
   --tile-min: 155px;
@@ -702,6 +703,36 @@ textarea:focus-visible {
 }
 
 /* ---------- Detail sheet (title card) ---------- */
+.detail-card {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: min(92vw, 420px);
+  max-height: 82vh;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 20px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -50%) scale(0.92);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 0.36s var(--ease-smooth),
+    opacity 0.28s var(--ease-smooth);
+}
+.detail-card.open {
+  transform: translate(-50%, -50%) scale(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+.detail-card .sheet-body {
+  overflow-y: auto;
+}
+
 .detail-body {
   padding-top: 2px;
 }

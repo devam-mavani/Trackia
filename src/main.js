@@ -2,6 +2,7 @@ import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { initThemedSelects, syncThemedSelect } from './themedSelect.js';
+import '@fontsource-variable/outfit';
 
 /* ---------------------------------------------------------------------- */
 /*  Storage                                                                */
@@ -436,10 +437,33 @@ function openDetailSheet(id) {
     detailNotesWrap.hidden = true;
   }
 
-  openSheet(detailSheet);
+  openDetailCard();
 }
 
-$('#detailClose').addEventListener('click', () => closeSheet(detailSheet));
+function openDetailCard() {
+  document.body.style.overflow = 'hidden';
+
+  backdrop.hidden = false;
+  void backdrop.offsetWidth;
+  backdrop.classList.add('visible');
+
+  detailSheet.hidden = false;
+  detailSheet.classList.remove('open');
+  void detailSheet.offsetWidth;
+  detailSheet.classList.add('open');
+}
+
+function closeDetailCard() {
+  detailSheet.classList.remove('open');
+  backdrop.classList.remove('visible');
+  document.body.style.overflow = '';
+  setTimeout(() => {
+    detailSheet.hidden = true;
+    if (ALL_SHEETS.every((s) => s.hidden)) backdrop.hidden = true;
+  }, 320);
+}
+
+$('#detailClose').addEventListener('click', () => closeDetailCard());
 
 $('#detailBumpBtn').addEventListener('click', () => {
   if (!detailId) return;
@@ -449,8 +473,8 @@ $('#detailBumpBtn').addEventListener('click', () => {
 
 $('#detailEditBtn').addEventListener('click', () => {
   const id = detailId;
-  closeSheet(detailSheet);
-  setTimeout(() => openEntrySheet(id), 260);
+  closeDetailCard();
+  setTimeout(() => openEntrySheet(id), 220);
 });
 
 $('#detailDeleteBtn').addEventListener('click', () => {
@@ -459,7 +483,7 @@ $('#detailDeleteBtn').addEventListener('click', () => {
   entries = entries.filter((x) => x.id !== detailId);
   saveEntries(entries);
   render();
-  closeSheet(detailSheet);
+  closeDetailCard();
   showToast('Entry deleted');
 });
 
@@ -529,12 +553,11 @@ function wireSwipeToClose(handleEl, sheetEl, onClose) {
 backdrop.addEventListener('click', () => {
   if (!entrySheet.hidden) closeSheet(entrySheet);
   if (!menuSheet.hidden) closeSheet(menuSheet);
-  if (!detailSheet.hidden) closeSheet(detailSheet);
+  if (!detailSheet.hidden) closeDetailCard();
 });
 
 wireSwipeToClose($('#sheetHandle'), entrySheet, () => closeSheet(entrySheet));
 wireSwipeToClose($('#menuHandle'), menuSheet, () => closeSheet(menuSheet));
-wireSwipeToClose($('#detailHandle'), detailSheet, () => closeSheet(detailSheet));
 
 /* ---------------------------------------------------------------------- */
 /*  Entry form                                                             */
