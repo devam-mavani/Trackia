@@ -2,6 +2,18 @@ import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { initThemedSelects, syncThemedSelect } from './themedSelect.js';
+import {
+  cloudEnabled,
+  onAuthChange,
+  signUp,
+  signIn,
+  signOutUser,
+  resetPassword,
+  subscribeEntries,
+  upsertEntryRemote,
+  deleteEntryRemote,
+  bulkUpsertEntriesRemote,
+} from './cloud.js';
 
 /* ---------------------------------------------------------------------- */
 /*  Storage                                                                */
@@ -9,6 +21,7 @@ import { initThemedSelects, syncThemedSelect } from './themedSelect.js';
 
 const ENTRIES_KEY = 'trackia_entries_v1';
 const SETTINGS_KEY = 'trackia_settings_v1';
+const AUTH_MODE_KEY = 'trackia_auth_mode';
 
 const UNIT_BY_TYPE = {
   anime: 'episodes',
@@ -64,6 +77,9 @@ function saveSettings(settings) {
 
 let entries = loadEntries();
 let settings = loadSettings();
+let currentUser = null;
+let unsubscribeCloudEntries = null;
+let authMode = 'login';
 
 const state = {
   typeFilter: 'all',
@@ -325,14 +341,22 @@ function renderListItem(e) {
 function bumpProgress(id) {
   const e = entries.find((x) => x.id === id);
   if (!e) return;
-  e.progress = (e.progress || 0) + 1;
-  if (e.total && e.progress >= e.total) {
-    e.progress = e.total;
-    e.status = 'completed';
+  const updated = { ...e, progress: (e.progress || 0) + 1, updatedAt: Date.now() };
+  if (updated.total && updated.progress >= updated.total) {
+    updated.progress = updated.total;
+    updated.status = 'completed';
   }
-  e.updatedAt = Date.now();
-  saveEntries(entries);
-  render();
+  if (currentUser) {
+    // Signed in: write to Firestore and let the live subscription refresh
+    // the UI — keeps a single source of truth instead of updating twice.
+    upsertEntryRemote(currentUser.uid, updated).catch(() =>
+      showToast('Could not sync that change — check your connection')
+    );
+  } else {
+    Object.assign(e, updated);
+    saveEntries(entries);
+    render();
+  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -691,15 +715,29 @@ form.addEventListener('submit', (e) => {
     updatedAt: Date.now(),
   };
 
+  let fullEntry;
   if (state.editingId) {
-    const idx = entries.findIndex((x) => x.id === state.editingId);
-    if (idx >= 0) entries[idx] = { ...entries[idx], ...payload };
+    const existing = entries.find((x) => x.id === state.editingId) || {};
+    fullEntry = { ...existing, ...payload, id: state.editingId };
   } else {
-    entries.push({ id: crypto.randomUUID(), createdAt: Date.now(), ...payload });
+    fullEntry = { id: crypto.randomUUID(), createdAt: Date.now(), ...payload };
   }
 
-  saveEntries(entries);
-  render();
+  if (currentUser) {
+    upsertEntryRemote(currentUser.uid, fullEntry).catch(() =>
+      showToast('Could not sync — check your connection')
+    );
+  } else {
+    if (state.editingId) {
+      const idx = entries.findIndex((x) => x.id === state.editingId);
+      if (idx >= 0) entries[idx] = fullEntry;
+    } else {
+      entries.push(fullEntry);
+    }
+    saveEntries(entries);
+    render();
+  }
+
   closeSheet(entrySheet);
   showToast(state.editingId ? 'Entry updated' : 'Entry added');
 });
@@ -707,9 +745,15 @@ form.addEventListener('submit', (e) => {
 deleteEntryBtn.addEventListener('click', () => {
   if (!state.editingId) return;
   if (!confirm('Delete this entry? This cannot be undone.')) return;
-  entries = entries.filter((x) => x.id !== state.editingId);
-  saveEntries(entries);
-  render();
+  if (currentUser) {
+    deleteEntryRemote(currentUser.uid, state.editingId).catch(() =>
+      showToast('Could not delete — check your connection')
+    );
+  } else {
+    entries = entries.filter((x) => x.id !== state.editingId);
+    saveEntries(entries);
+    render();
+  }
   closeSheet(entrySheet);
   showToast('Entry deleted');
 });
@@ -860,11 +904,11 @@ $('#importFile').addEventListener('change', async (e) => {
     if (!Array.isArray(incoming)) throw new Error('Invalid file');
 
     const existingIds = new Set(entries.map((x) => x.id));
-    let added = 0;
+    const toAdd = [];
     incoming.forEach((raw) => {
       const id = raw.id && !existingIds.has(raw.id) ? raw.id : crypto.randomUUID();
       existingIds.add(id);
-      entries.push({
+      toAdd.push({
         id,
         title: raw.title || 'Untitled',
         type: TYPE_LABEL[raw.type] ? raw.type : 'anime',
@@ -879,12 +923,16 @@ $('#importFile').addEventListener('change', async (e) => {
         createdAt: raw.createdAt || Date.now(),
         updatedAt: raw.updatedAt || Date.now(),
       });
-      added++;
     });
 
-    saveEntries(entries);
-    render();
-    showToast(`Imported ${added} entr${added === 1 ? 'y' : 'ies'}`);
+    if (currentUser) {
+      await bulkUpsertEntriesRemote(currentUser.uid, toAdd);
+    } else {
+      entries.push(...toAdd);
+      saveEntries(entries);
+      render();
+    }
+    showToast(`Imported ${toAdd.length} entr${toAdd.length === 1 ? 'y' : 'ies'}`);
   } catch (err) {
     showToast('Could not read that file');
   } finally {
@@ -918,6 +966,190 @@ $('#typeTabs').addEventListener('click', (e) => {
 
 $('#statusFilter').addEventListener('change', (e) => { state.statusFilter = e.target.value; render(); });
 $('#sortSelect').addEventListener('change', (e) => { state.sort = e.target.value; render(); });
+
+/* ---------------------------------------------------------------------- */
+/*  Account: sign in / sign up / sync                                      */
+/* ---------------------------------------------------------------------- */
+
+const authScreen = $('#authScreen');
+const authForm = $('#authForm');
+const auth_email = $('#auth_email');
+const auth_password = $('#auth_password');
+const authError = $('#authError');
+const authSub = $('#authSub');
+const authSubmitBtn = $('#authSubmitBtn');
+const authToggleModeBtn = $('#authToggleModeBtn');
+const authForgotBtn = $('#authForgotBtn');
+const authOfflineBtn = $('#authOfflineBtn');
+const accountStatus = $('#accountStatus');
+const accountSignInBtn = $('#accountSignInBtn');
+const accountSignOutBtn = $('#accountSignOutBtn');
+
+function friendlyAuthError(err) {
+  if (!cloudEnabled()) return 'Cloud sync isn\u2019t configured yet — see src/cloud.js.';
+  switch (err && err.code) {
+    case 'auth/email-already-in-use':
+      return 'That email already has an account — try logging in instead.';
+    case 'auth/invalid-email':
+      return 'That doesn\u2019t look like a valid email address.';
+    case 'auth/weak-password':
+      return 'Password should be at least 6 characters.';
+    case 'auth/user-not-found':
+    case 'auth/wrong-password':
+    case 'auth/invalid-credential':
+      return 'Incorrect email or password.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts — wait a bit and try again.';
+    default:
+      return 'Something went wrong — try again.';
+  }
+}
+
+function setAuthMode(mode) {
+  authMode = mode;
+  authError.hidden = true;
+  if (mode === 'signup') {
+    authSub.textContent = 'Create an account to sync your library across devices.';
+    authSubmitBtn.textContent = 'Create account';
+    authToggleModeBtn.textContent = 'Already have an account? Log in';
+    auth_password.setAttribute('autocomplete', 'new-password');
+  } else {
+    authSub.textContent = 'Sign in to sync your library across devices, or skip it and keep everything on this device.';
+    authSubmitBtn.textContent = 'Log in';
+    authToggleModeBtn.textContent = 'Need an account? Sign up';
+    auth_password.setAttribute('autocomplete', 'current-password');
+  }
+}
+
+function showAuthScreen() {
+  authError.hidden = true;
+  authScreen.hidden = false;
+}
+function hideAuthScreen() {
+  authScreen.hidden = true;
+}
+
+// A brand-new install with no local data yet gets the sign-in prompt.
+// Anyone already using Trackia offline is never interrupted by it — they
+// can still opt into an account any time from Settings → Account.
+function shouldPromptAuth() {
+  if (!cloudEnabled()) return false;
+  if (localStorage.getItem(AUTH_MODE_KEY) === 'offline') return false;
+  if (entries.length > 0) {
+    localStorage.setItem(AUTH_MODE_KEY, 'offline');
+    return false;
+  }
+  return true;
+}
+
+async function maybeMigrateOfflineEntries(user) {
+  const local = loadEntries();
+  if (!local.length) return;
+  const ok = confirm(
+    `You have ${local.length} item${local.length === 1 ? '' : 's'} saved on this device. Add ${local.length === 1 ? 'it' : 'them'} to your account?`
+  );
+  if (!ok) return;
+  try {
+    await bulkUpsertEntriesRemote(user.uid, local);
+    showToast('Offline library added to your account');
+  } catch (err) {
+    showToast('Could not sync your offline library — check your connection');
+  }
+}
+
+function updateAccountUI() {
+  if (currentUser) {
+    accountStatus.textContent = `Signed in as ${currentUser.email} — synced across devices.`;
+    accountSignInBtn.hidden = true;
+    accountSignOutBtn.hidden = false;
+  } else {
+    accountStatus.textContent = cloudEnabled()
+      ? 'Not signed in — your library is only on this device.'
+      : 'Not signed in — your library is only on this device. Cloud sync isn\u2019t configured yet.';
+    accountSignInBtn.hidden = false;
+    accountSignOutBtn.hidden = true;
+  }
+}
+
+authForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  authError.hidden = true;
+  const email = auth_email.value.trim();
+  const password = auth_password.value;
+  authSubmitBtn.disabled = true;
+  try {
+    if (authMode === 'signup') {
+      await signUp(email, password);
+      showToast('Account created');
+    } else {
+      await signIn(email, password);
+      showToast('Signed in');
+    }
+    // onAuthChange (below) takes it from here: hides this screen, migrates
+    // any offline entries, and subscribes to the account's library.
+  } catch (err) {
+    authError.textContent = friendlyAuthError(err);
+    authError.hidden = false;
+  } finally {
+    authSubmitBtn.disabled = false;
+  }
+});
+
+authToggleModeBtn.addEventListener('click', () => setAuthMode(authMode === 'login' ? 'signup' : 'login'));
+
+authForgotBtn.addEventListener('click', async () => {
+  const email = auth_email.value.trim();
+  if (!email) { showToast('Enter your email first'); return; }
+  try {
+    await resetPassword(email);
+    showToast('Password reset email sent');
+  } catch (err) {
+    showToast(friendlyAuthError(err));
+  }
+});
+
+authOfflineBtn.addEventListener('click', () => {
+  localStorage.setItem(AUTH_MODE_KEY, 'offline');
+  hideAuthScreen();
+});
+
+accountSignInBtn.addEventListener('click', () => {
+  closeSheet(menuSheet);
+  setAuthMode('login');
+  showAuthScreen();
+});
+
+accountSignOutBtn.addEventListener('click', async () => {
+  try {
+    await signOutUser();
+    showToast('Signed out');
+  } catch (err) {
+    showToast('Could not sign out — try again');
+  }
+});
+
+onAuthChange((user) => {
+  currentUser = user;
+  updateAccountUI();
+
+  if (unsubscribeCloudEntries) {
+    unsubscribeCloudEntries();
+    unsubscribeCloudEntries = null;
+  }
+
+  if (user) {
+    hideAuthScreen();
+    maybeMigrateOfflineEntries(user);
+    unsubscribeCloudEntries = subscribeEntries(user.uid, (remoteEntries) => {
+      entries = remoteEntries;
+      render();
+    });
+  } else {
+    entries = loadEntries();
+    render();
+    if (shouldPromptAuth()) showAuthScreen();
+  }
+});
 
 /* ---------------------------------------------------------------------- */
 /*  Toast                                                                  */

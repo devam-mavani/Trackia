@@ -12,6 +12,59 @@
   </head>
   <body>
     <div id="app">
+      <!-- Auth overlay: shown for brand-new installs until the person signs
+           in or chooses to continue without an account. Existing offline
+           libraries are never interrupted by this. -->
+      <div class="auth-screen" id="authScreen" hidden>
+        <div class="auth-card">
+          <img src="/src/assets/logo.jpg" alt="" class="auth-logo" />
+          <h1 class="auth-title">Trackia</h1>
+          <p class="auth-sub" id="authSub">
+            Sign in to sync your library across devices, or skip it and keep
+            everything on this device.
+          </p>
+
+          <form id="authForm" class="auth-form">
+            <label class="field">
+              <span>Email</span>
+              <input
+                type="email"
+                id="auth_email"
+                autocomplete="email"
+                required
+              />
+            </label>
+            <label class="field">
+              <span>Password</span>
+              <input
+                type="password"
+                id="auth_password"
+                autocomplete="current-password"
+                minlength="6"
+                required
+              />
+            </label>
+            <p class="auth-error" id="authError" hidden></p>
+            <button type="submit" class="btn-primary" id="authSubmitBtn">
+              Log in
+            </button>
+          </form>
+
+          <button type="button" class="link-btn" id="authToggleModeBtn">
+            Need an account? Sign up
+          </button>
+          <button type="button" class="link-btn" id="authForgotBtn">
+            Forgot password?
+          </button>
+
+          <div class="auth-divider"><span>or</span></div>
+
+          <button type="button" class="btn-ghost" id="authOfflineBtn">
+            Continue without an account
+          </button>
+        </div>
+      </div>
+
       <!-- Top bar -->
       <header class="topbar">
         <div class="brand-wrap">
@@ -294,6 +347,21 @@
         </div>
 
         <div class="sheet-body">
+          <div class="settings-group" id="accountGroup">
+            <h3>Account</h3>
+            <p class="settings-hint" id="accountStatus">
+              Not signed in — your library is only on this device.
+            </p>
+            <div class="btn-row">
+              <button class="btn-ghost" id="accountSignInBtn">
+                Sign in / Sign up
+              </button>
+              <button class="btn-ghost danger" id="accountSignOutBtn" hidden>
+                Sign out
+              </button>
+            </div>
+          </div>
+
           <div class="settings-group">
             <h3>Font size</h3>
             <div class="segmented" id="fontSizeSeg">
