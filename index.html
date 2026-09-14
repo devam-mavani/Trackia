@@ -464,17 +464,27 @@
             <p class="settings-hint">
               Lets you paste an IMDb link in the entry form to auto-fill the
               title and cover. IMDb itself doesn't offer a public API, so
-              this uses <strong>The Movie Database (TMDB)</strong>, a free,
-              community-run service — grab your own key at
-              themoviedb.org/settings/api and paste it below. Nothing is sent
-              anywhere except TMDB's servers, and only when you tap Fetch.
+              this uses free third-party services instead — add a key for
+              either or both, and the app will try TMDB first, then fall
+              back to OMDb if needed (handy if one is blocked on your
+              network).
             </p>
             <label class="field">
               <span>TMDB API key</span>
               <input
                 type="text"
                 id="tmdbApiKeyInput"
-                placeholder="Paste your key here"
+                placeholder="Paste your key here — themoviedb.org/settings/api"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+            <label class="field">
+              <span>OMDb API key</span>
+              <input
+                type="text"
+                id="omdbApiKeyInput"
+                placeholder="Paste your key here — omdbapi.com/apikey.aspx"
                 autocomplete="off"
                 spellcheck="false"
               />
