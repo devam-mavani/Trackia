@@ -285,38 +285,49 @@ function renderCard(e) {
   return card;
 }
 
-/** List-type entries render as a plain full-width title strip instead of a
- *  cover card — no cover art, no progress bar, just the title and a bit of
- *  status/rating/tag context on one line. */
+/** List-type entries render as a Keep-style note card instead of a cover
+ *  card — no cover art, no progress bar; just a title, a text snippet from
+ *  the note body, and a bit of status/rating/tag context underneath. */
 function renderListItem(e) {
   const row = document.createElement('article');
   row.className = 'card list-item';
   row.dataset.id = e.id;
 
+  const head = document.createElement('div');
+  head.className = 'list-item-head';
+
   const title = document.createElement('h3');
   title.className = 'list-item-title';
   title.textContent = e.title;
-  row.appendChild(title);
+  head.appendChild(title);
 
-  if (e.tags && e.tags.length) {
-    const tagRow = document.createElement('div');
-    tagRow.className = 'list-item-tags';
-    e.tags.slice(0, 3).forEach((t) => {
-      const chip = document.createElement('span');
-      chip.className = 'chip';
-      chip.textContent = t;
-      tagRow.appendChild(chip);
-    });
-    row.appendChild(tagRow);
-  }
-
-  const meta = document.createElement('div');
-  meta.className = 'list-item-meta';
   if (e.rating) {
     const rating = document.createElement('span');
     rating.className = 'badge badge-rating';
     rating.textContent = `★ ${e.rating}`;
-    meta.appendChild(rating);
+    head.appendChild(rating);
+  }
+  row.appendChild(head);
+
+  if (e.notes) {
+    const plain = richNotesToPlainText(e.notes);
+    if (plain) {
+      const preview = document.createElement('p');
+      preview.className = 'list-item-preview';
+      preview.textContent = plain.length > 160 ? `${plain.slice(0, 160).trimEnd()}…` : plain;
+      row.appendChild(preview);
+    }
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'list-item-meta';
+  if (e.tags && e.tags.length) {
+    e.tags.slice(0, 4).forEach((t) => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = t;
+      meta.appendChild(chip);
+    });
   }
   const status = document.createElement('span');
   status.className = 'card-status';
@@ -433,7 +444,11 @@ function openDetailSheet(id) {
   // Notes
   if (e.notes) {
     detailNotesWrap.hidden = false;
-    detailNotes.textContent = e.notes;
+    if (e.type === 'list') {
+      detailNotes.innerHTML = sanitizeRichHtml(e.notes);
+    } else {
+      detailNotes.textContent = e.notes;
+    }
   } else {
     detailNotesWrap.hidden = true;
   }
@@ -578,6 +593,10 @@ const f_status = $('#f_status');
 const f_rating = $('#f_rating');
 const f_rating_val = $('#f_rating_val');
 const f_notes = $('#f_notes');
+const f_notesField = $('#f_notesField');
+const f_richNotesField = $('#f_richNotesField');
+const f_richNotes = $('#f_richNotes');
+const richToolbar = $('#richToolbar');
 const f_tagInput = $('#f_tagInput');
 const tagChips = $('#tagChips');
 const deleteEntryBtn = $('#deleteEntryBtn');
@@ -604,6 +623,14 @@ function updateUnitLabels() {
     setCoverPreview(null);
   }
 
+  // Pure show/hide only — no content is touched here. Migrating text
+  // between the plain textarea and the rich editor only happens when the
+  // person actually changes the Type dropdown themselves (see the
+  // 'change' listener below), never as a side effect of this function
+  // running again with the type unchanged.
+  f_notesField.hidden = isListType;
+  f_richNotesField.hidden = !isListType;
+
   if (unit === 'watch') {
     f_progress_label.textContent = 'Watched';
     f_total_label.textContent = 'Total (optional)';
@@ -613,7 +640,20 @@ function updateUnitLabels() {
     f_total_label.textContent = `Total ${unit} (optional)`;
   }
 }
-f_type.addEventListener('change', updateUnitLabels);
+f_type.addEventListener('change', () => {
+  // Switching the Type dropdown mid-edit shouldn't drop whatever notes are
+  // already typed — carry them over to the other editor as plain text.
+  const isListType = f_type.value === 'list';
+  const wasListType = !f_richNotesField.hidden;
+  if (isListType && !wasListType) {
+    f_richNotes.textContent = f_notes.value.trim();
+    f_notes.value = '';
+  } else if (!isListType && wasListType) {
+    f_notes.value = f_richNotes.innerText.trim();
+    f_richNotes.innerHTML = '';
+  }
+  updateUnitLabels();
+});
 
 f_rating.addEventListener('input', () => {
   f_rating_val.textContent = f_rating.value === '0' ? '—' : f_rating.value;
@@ -638,6 +678,122 @@ function escapeHtml(str) {
   d.textContent = str;
   return d.innerHTML;
 }
+
+/* ---- Rich note sanitizer (List-type entries) ----
+   The rich text note editor below stores its content as an HTML string in
+   the same `notes` field plain-text notes use. That HTML can also arrive
+   from a JSON backup import, which is a hand-editable file — so before it
+   is ever written into innerHTML (in the editor, the detail view, or a
+   card preview) it's run through this small allow-list sanitizer instead
+   of being trusted as-is. Only a few formatting tags survive, and the
+   only attribute kept is a `font-size` style on <span>. */
+const RICH_TAGS = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'BR', 'DIV', 'P', 'SPAN', 'UL', 'OL', 'LI']);
+const RICH_DROP_TAGS = new Set([
+  'SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META',
+  'IMG', 'SVG', 'FORM', 'INPUT', 'BUTTON', 'VIDEO', 'AUDIO', 'SOURCE', 'TEMPLATE',
+]);
+
+function sanitizeRichHtml(html) {
+  const doc = new DOMParser().parseFromString(`<div>${html || ''}</div>`, 'text/html');
+  const root = doc.body.firstChild;
+
+  function clean(node) {
+    [...node.childNodes].forEach((child) => {
+      if (child.nodeType === Node.TEXT_NODE) return;
+      if (child.nodeType !== Node.ELEMENT_NODE) { child.remove(); return; }
+
+      if (RICH_DROP_TAGS.has(child.tagName)) {
+        child.remove();
+        return;
+      }
+
+      // Recurse before deciding whether to keep this node, so a disallowed
+      // tag nested inside another disallowed tag is still cleaned up once
+      // both layers get unwrapped.
+      clean(child);
+
+      if (!RICH_TAGS.has(child.tagName)) {
+        while (child.firstChild) node.insertBefore(child.firstChild, child);
+        node.removeChild(child);
+        return;
+      }
+
+      [...child.attributes].forEach((attr) => {
+        if (child.tagName === 'SPAN' && attr.name === 'style') {
+          const match = /font-size:\s*(\d+(?:\.\d+)?)(px|pt|em|rem)/i.exec(attr.value);
+          if (match) child.setAttribute('style', `font-size:${match[1]}${match[2]}`);
+          else child.removeAttribute('style');
+        } else {
+          child.removeAttribute(attr.name);
+        }
+      });
+    });
+  }
+
+  clean(root);
+  return root.innerHTML;
+}
+
+function richNotesToPlainText(html) {
+  const div = document.createElement('div');
+  div.innerHTML = sanitizeRichHtml(html);
+  return (div.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+/* ---- Rich note toolbar (Bold / Italic / Underline / size / bullets) ---- */
+const RICH_FONT_SIZE_PX = { 2: '12px', 3: '15px', 5: '20px' };
+
+function applyRichFontSize(execSize) {
+  document.execCommand('fontSize', false, execSize);
+  // execCommand('fontSize') only knows how to wrap the selection in a
+  // legacy <font size="N">, so immediately swap any of those out for a
+  // <span style="font-size:...">, which is all the sanitizer keeps anyway.
+  f_richNotes.querySelectorAll('font[size]').forEach((font) => {
+    const span = document.createElement('span');
+    const px = RICH_FONT_SIZE_PX[font.getAttribute('size')];
+    if (px) span.style.fontSize = px;
+    while (font.firstChild) span.appendChild(font.firstChild);
+    font.replaceWith(span);
+  });
+}
+
+function isRichCmdActive(cmd) {
+  try {
+    return document.queryCommandState(cmd);
+  } catch {
+    return false;
+  }
+}
+
+function updateRichToolbarState() {
+  ['bold', 'italic', 'underline', 'insertUnorderedList'].forEach((cmd) => {
+    const btn = richToolbar.querySelector(`[data-cmd="${cmd}"]`);
+    if (btn) btn.classList.toggle('active', isRichCmdActive(cmd));
+  });
+}
+
+richToolbar.addEventListener('mousedown', (e) => {
+  // Without this, clicking a toolbar button first steals focus away from
+  // the editor, which collapses the text selection before execCommand
+  // gets a chance to use it.
+  if (e.target.closest('.rich-btn')) e.preventDefault();
+});
+
+richToolbar.addEventListener('click', (e) => {
+  const btn = e.target.closest('.rich-btn');
+  if (!btn) return;
+  f_richNotes.focus();
+  if (btn.dataset.size) {
+    applyRichFontSize(btn.dataset.size);
+  } else if (btn.dataset.cmd) {
+    document.execCommand(btn.dataset.cmd, false, null);
+  }
+  updateRichToolbarState();
+});
+
+f_richNotes.addEventListener('keyup', updateRichToolbarState);
+f_richNotes.addEventListener('mouseup', updateRichToolbarState);
+f_richNotes.addEventListener('focus', updateRichToolbarState);
 
 f_tagInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
@@ -952,6 +1108,9 @@ function resetForm() {
   coverLinkRow.hidden = true;
   coverLinkInput.value = '';
   setCoverPreview(null);
+  // form.reset() only touches native form controls, not the contenteditable
+  // rich note editor, so it needs clearing by hand.
+  f_richNotes.innerHTML = '';
   f_rating.value = 0;
   f_rating_val.textContent = '—';
   renderTagChips();
@@ -976,7 +1135,13 @@ function openEntrySheet(id) {
       f_status.value = e.status;
       f_rating.value = e.rating || 0;
       f_rating_val.textContent = e.rating ? e.rating : '—';
-      f_notes.value = e.notes || '';
+      if (e.type === 'list') {
+        f_notes.value = '';
+        f_richNotes.innerHTML = sanitizeRichHtml(e.notes || '');
+      } else {
+        f_notes.value = e.notes || '';
+        f_richNotes.innerHTML = '';
+      }
       state.draftTags = [...(e.tags || [])];
       setCoverPreview(e.cover || null, e.title);
       renderTagChips();
@@ -999,6 +1164,15 @@ form.addEventListener('submit', (e) => {
   const title = f_title.value.trim();
   if (!title) return;
 
+  // List-type entries store the rich editor's HTML (sanitized on the way
+  // in); everything else keeps plain-text notes as before. richTextEmpty
+  // guards against contenteditable's habit of leaving a stray <br> behind
+  // in an editor the person never actually typed into.
+  const richTextEmpty = f_richNotes.textContent.trim() === '';
+  const notes = f_type.value === 'list'
+    ? (richTextEmpty ? '' : sanitizeRichHtml(f_richNotes.innerHTML).trim())
+    : f_notes.value.trim();
+
   const payload = {
     title,
     type: f_type.value,
@@ -1007,7 +1181,7 @@ form.addEventListener('submit', (e) => {
     total: f_total.value === '' ? null : Number(f_total.value),
     status: f_status.value,
     rating: Number(f_rating.value) || 0,
-    notes: f_notes.value.trim(),
+    notes,
     tags: state.draftTags.slice(),
     cover: state.draftCover,
     updatedAt: Date.now(),
@@ -1238,13 +1412,67 @@ $('#searchInput').addEventListener('input', (e) => {
   render();
 });
 
+function setTypeFilter(type) {
+  const btn = document.querySelector(`.type-tab[data-type="${type}"]`);
+  if (!btn) return;
+  state.typeFilter = type;
+  document.querySelectorAll('.type-tab').forEach((b) => b.classList.toggle('active', b === btn));
+  btn.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+  render();
+}
+
 $('#typeTabs').addEventListener('click', (e) => {
   const btn = e.target.closest('.type-tab');
   if (!btn) return;
-  state.typeFilter = btn.dataset.type;
-  document.querySelectorAll('.type-tab').forEach((b) => b.classList.toggle('active', b === btn));
-  render();
+  setTypeFilter(btn.dataset.type);
 });
+
+/* ---- Swipe left/right on the card grid to switch type tabs ---- */
+function wireSwipeTabs(el) {
+  let startX = 0;
+  let startY = 0;
+  let tracking = false;
+
+  const SWIPE_THRESHOLD = 60; // px of horizontal travel needed to count as a swipe
+
+  el.addEventListener('touchstart', (e) => {
+    const t = e.touches[0];
+    tracking = true;
+    startX = t.clientX;
+    startY = t.clientY;
+  }, { passive: true });
+
+  el.addEventListener('touchend', (e) => {
+    if (!tracking) return;
+    tracking = false;
+
+    const t = e.changedTouches[0];
+    const dx = t.clientX - startX;
+    const dy = t.clientY - startY;
+    // Require the gesture to be mostly horizontal so a vertical scroll of
+    // the grid is never mistaken for a tab swipe.
+    if (Math.abs(dx) < SWIPE_THRESHOLD || Math.abs(dx) <= Math.abs(dy)) return;
+
+    const tabs = Array.from(document.querySelectorAll('.type-tab'));
+    const currentIndex = tabs.findIndex((b) => b.dataset.type === state.typeFilter);
+    if (currentIndex === -1) return;
+    // Swipe left (dx < 0) moves forward to the next tab; swipe right moves
+    // back — clamped at the ends rather than wrapping around.
+    const nextIndex = dx < 0
+      ? Math.min(tabs.length - 1, currentIndex + 1)
+      : Math.max(0, currentIndex - 1);
+    if (nextIndex === currentIndex) return;
+
+    // A recognized swipe shouldn't also fire a click on whatever card was
+    // under the finger at release — that would pop open its detail sheet
+    // right after the tab switch.
+    e.preventDefault();
+    setTypeFilter(tabs[nextIndex].dataset.type);
+  });
+}
+
+wireSwipeTabs(grid);
+wireSwipeTabs(emptyState);
 
 $('#statusFilter').addEventListener('change', (e) => { state.statusFilter = e.target.value; render(); });
 $('#sortSelect').addEventListener('change', (e) => { state.sort = e.target.value; render(); });

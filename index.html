@@ -253,7 +253,7 @@
             />
           </label>
 
-          <label class="field">
+          <label class="field" id="f_notesField">
             <span>Notes</span>
             <textarea
               id="f_notes"
@@ -262,6 +262,30 @@
               placeholder="Thoughts, reminders…"
             ></textarea>
           </label>
+
+          <!-- List-type entries get a Keep-style rich text note instead of
+               the plain textarea above (toggled in updateUnitLabels). -->
+          <div class="field" id="f_richNotesField" hidden>
+            <span>Note</span>
+            <div class="rich-toolbar" id="richToolbar">
+              <button type="button" class="rich-btn" data-cmd="bold" title="Bold" aria-label="Bold"><b>B</b></button>
+              <button type="button" class="rich-btn" data-cmd="italic" title="Italic" aria-label="Italic"><i>I</i></button>
+              <button type="button" class="rich-btn" data-cmd="underline" title="Underline" aria-label="Underline"><u>U</u></button>
+              <span class="rich-divider"></span>
+              <button type="button" class="rich-btn" data-size="2" title="Small text" aria-label="Small text">S</button>
+              <button type="button" class="rich-btn" data-size="3" title="Normal text" aria-label="Normal text">M</button>
+              <button type="button" class="rich-btn" data-size="5" title="Large text" aria-label="Large text">L</button>
+              <span class="rich-divider"></span>
+              <button type="button" class="rich-btn" data-cmd="insertUnorderedList" title="Bullet list" aria-label="Bullet list">☰</button>
+              <button type="button" class="rich-btn" data-cmd="removeFormat" title="Clear formatting" aria-label="Clear formatting">✕</button>
+            </div>
+            <div
+              class="rich-editor"
+              id="f_richNotes"
+              contenteditable="true"
+              data-placeholder="Write your note…"
+            ></div>
+          </div>
 
           <label class="field">
             <span>Tags</span>
@@ -337,7 +361,7 @@
 
           <div class="detail-notes" id="detailNotesWrap" hidden>
             <h3>Notes</h3>
-            <p id="detailNotes"></p>
+            <div id="detailNotes"></div>
           </div>
 
           <div class="sheet-actions detail-actions">

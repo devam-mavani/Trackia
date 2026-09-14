@@ -396,14 +396,20 @@ textarea:focus-visible {
   }
 }
 
-/* ---------- List-type entries: horizontal title strip ---------- */
+/* ---------- List-type entries: Keep-style note card ---------- */
 .card.list-item {
   grid-column: 1 / -1;
-  flex-direction: row;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   padding: 13px 16px;
   border-left: 3px solid var(--c-accent);
+}
+
+.list-item-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .list-item-title {
@@ -418,25 +424,29 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
-.list-item-tags {
-  display: flex;
-  gap: 6px;
-  flex: none;
-  max-width: 35%;
+.list-item-preview {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--c-text-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-}
-.list-item-tags .chip {
-  white-space: nowrap;
 }
 
 .list-item-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.list-item-meta .chip {
+  white-space: nowrap;
 }
 .list-item-meta .card-status {
   white-space: nowrap;
+  margin-left: auto;
 }
 
 .card-cover {
@@ -835,7 +845,7 @@ textarea:focus-visible {
   color: var(--c-text-dim);
   margin: 0 0 6px;
 }
-.detail-notes p {
+.detail-notes > div {
   margin: 0;
   font-size: 0.9rem;
   line-height: 1.55;
@@ -887,6 +897,78 @@ textarea:focus-visible {
 }
 .field-row .field {
   flex: 1;
+}
+
+/* ---------- Rich text notes (List-type entries) ---------- */
+.rich-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.rich-btn {
+  flex: none;
+  min-width: 34px;
+  height: 32px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  color: var(--c-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  transition:
+    background 0.2s var(--ease-smooth),
+    border-color 0.2s var(--ease-smooth),
+    transform 0.2s var(--ease-spring);
+}
+.rich-btn:active {
+  transform: scale(0.92);
+}
+.rich-btn.active {
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+  color: #fff;
+}
+.rich-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 2px;
+  background: var(--c-border);
+}
+
+.rich-editor {
+  min-height: 110px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--c-text);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.rich-editor:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+.rich-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--c-text-dim);
+}
+.rich-editor ul {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.detail-notes .rich-editor,
+.detail-notes ul {
+  margin: 4px 0;
+  padding-left: 20px;
 }
 
 .cover-picker {
