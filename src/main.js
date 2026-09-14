@@ -47,7 +47,6 @@ function loadSettings() {
     tileSize: 'medium',
     theme: { '--c-bg': '', '--c-surface': '', '--c-accent': '', '--c-text': '' },
     tmdbApiKey: '',
-    omdbApiKey: '',
   };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -707,7 +706,7 @@ coverLinkInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); useCoverLink(); }
 });
 
-/* ---- Import title + cover from an IMDb link (TMDB and/or OMDb) ---- */
+/* ---- Import title + cover from an IMDb link (via TMDB's find-by-id API) ---- */
 const imdbLinkInput = $('#imdbLinkInput');
 const imdbFetchBtn = $('#imdbFetchBtn');
 
@@ -725,9 +724,20 @@ function fetchWithTimeout(url, opts, ms = 12000) {
   return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
-// Each provider returns { title, type: 'movie'|'series', posterUrl } or throws.
+async function fetchImdbImport() {
+  const raw = imdbLinkInput.value.trim();
+  const imdbId = extractImdbId(raw);
+  if (!imdbId) {
+    showToast('Paste a full IMDb link, e.g. imdb.com/title/tt1234567');
+    return;
+  }
 
-async function fetchFromTmdb(imdbId, apiKey) {
+  const apiKey = settings.tmdbApiKey;
+  if (!apiKey) {
+    showToast('Add a free TMDB API key in Settings first');
+    return;
+  }
+
   // TMDB's settings page hands out two different credentials: a short
   // "API Key (v3 auth)" (~32 chars) and a long "API Read Access Token
   // (v4 auth)" JWT (100+ chars). Both are valid, but they're sent
@@ -740,97 +750,66 @@ async function fetchFromTmdb(imdbId, apiKey) {
     ? { headers: { Authorization: `Bearer ${apiKey}`, accept: 'application/json' } }
     : undefined;
 
-  const res = await fetchWithTimeout(url, fetchOpts);
-  if (res.status === 401) throw new Error('TMDB rejected that API key — double check it in Settings');
-  if (!res.ok) throw new Error(`TMDB error (${res.status})`);
-
-  const data = await res.json();
-  const movie = data.movie_results && data.movie_results[0];
-  const tv = data.tv_results && data.tv_results[0];
-  const hit = movie || tv;
-  if (!hit) throw new Error("Couldn't find that title on TMDB");
-
-  return {
-    title: hit.title || hit.name || '',
-    type: movie ? 'movie' : 'series',
-    posterUrl: hit.poster_path ? `https://image.tmdb.org/t/p/w500${hit.poster_path}` : null,
-  };
-}
-
-async function fetchFromOmdb(imdbId, apiKey) {
-  const url = `https://www.omdbapi.com/?i=${imdbId}&apikey=${encodeURIComponent(apiKey)}`;
-  const res = await fetchWithTimeout(url);
-  if (!res.ok) throw new Error(`OMDb error (${res.status})`);
-
-  const data = await res.json();
-  if (data.Response === 'False') throw new Error(data.Error || "Couldn't find that title on OMDb");
-
-  return {
-    title: data.Title || '',
-    type: data.Type === 'series' ? 'series' : 'movie',
-    posterUrl: data.Poster && data.Poster !== 'N/A' ? data.Poster : null,
-  };
-}
-
-async function fetchImdbImport() {
-  const raw = imdbLinkInput.value.trim();
-  const imdbId = extractImdbId(raw);
-  if (!imdbId) {
-    showToast('Paste a full IMDb link, e.g. imdb.com/title/tt1234567');
-    return;
-  }
-
-  const providers = [];
-  if (settings.tmdbApiKey) providers.push(['TMDB', () => fetchFromTmdb(imdbId, settings.tmdbApiKey)]);
-  if (settings.omdbApiKey) providers.push(['OMDb', () => fetchFromOmdb(imdbId, settings.omdbApiKey)]);
-
-  if (!providers.length) {
-    showToast('Add a free TMDB or OMDb API key in Settings first');
-    return;
-  }
-
   const originalLabel = imdbFetchBtn.textContent;
   imdbFetchBtn.disabled = true;
+  imdbFetchBtn.textContent = 'Fetching…';
 
-  const errors = [];
-  for (const [name, run] of providers) {
-    imdbFetchBtn.textContent = providers.length > 1 ? `Trying ${name}…` : 'Fetching…';
-    try {
-      const hit = await run();
-      if (hit.title) f_title.value = hit.title;
-      f_type.value = hit.type;
-      updateUnitLabels();
-      syncThemedSelect(f_type);
+  try {
+    const res = await fetchWithTimeout(url, fetchOpts);
 
-      if (hit.posterUrl) {
-        try {
-          const imgRes = await fetchWithTimeout(hit.posterUrl);
-          if (!imgRes.ok) throw new Error('bad_image');
-          const blob = await imgRes.blob();
-          setCoverPreview(await blobToDataUrl(blob), hit.title);
-        } catch {
-          // Still works even if we can't embed the image locally — it'll
-          // just load live from the provider instead of being cached offline.
-          setCoverPreview(hit.posterUrl, hit.title);
-        }
-      }
-
-      showToast(`Imported from ${name}`);
-      imdbFetchBtn.disabled = false;
-      imdbFetchBtn.textContent = originalLabel;
+    if (res.status === 401) {
+      showToast('TMDB rejected that API key — double check it in Settings');
       return;
-    } catch (err) {
-      const msg = err.name === 'AbortError' ? `${name} took too long to respond` : (err.message || `${name} failed`);
-      errors.push(msg);
-      console.error(`${name} import failed:`, err);
     }
-  }
+    if (!res.ok) {
+      showToast(`TMDB error (${res.status}) — try again shortly`);
+      console.error('TMDB find request failed:', res.status, await res.text().catch(() => ''));
+      return;
+    }
 
-  // Every configured provider failed — surface all of them so it's clear
-  // whether it's a bad key, a "not found", or a network/blocking issue.
-  showToast(errors.join(' · '));
-  imdbFetchBtn.disabled = false;
-  imdbFetchBtn.textContent = originalLabel;
+    const data = await res.json();
+    const movie = data.movie_results && data.movie_results[0];
+    const tv = data.tv_results && data.tv_results[0];
+    const hit = movie || tv;
+
+    if (!hit) {
+      showToast("Couldn't find that title on TMDB");
+      return;
+    }
+
+    const title = hit.title || hit.name || '';
+    if (title) f_title.value = title;
+
+    f_type.value = movie ? 'movie' : 'series';
+    updateUnitLabels();
+    syncThemedSelect(f_type);
+
+    if (hit.poster_path) {
+      const posterUrl = `https://image.tmdb.org/t/p/w500${hit.poster_path}`;
+      try {
+        const imgRes = await fetchWithTimeout(posterUrl, undefined, 12000);
+        if (!imgRes.ok) throw new Error('bad_image');
+        const blob = await imgRes.blob();
+        setCoverPreview(await blobToDataUrl(blob), title);
+      } catch {
+        // Still works even if we can't embed the image locally — it'll just
+        // load live from TMDB instead of being cached offline.
+        setCoverPreview(posterUrl, title);
+      }
+    }
+
+    showToast('Imported from TMDB');
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      showToast('TMDB took too long to respond — check your connection and try again');
+    } else {
+      showToast("Couldn't reach TMDB — check your connection");
+    }
+    console.error('TMDB import failed:', err);
+  } finally {
+    imdbFetchBtn.disabled = false;
+    imdbFetchBtn.textContent = originalLabel;
+  }
 }
 
 imdbFetchBtn.addEventListener('click', fetchImdbImport);
@@ -1047,18 +1026,11 @@ $('#themePreset').addEventListener('change', (e) => applyThemePreset(e.target.va
 $('#menuToggle').addEventListener('click', () => openSheet(menuSheet));
 $('#menuClose').addEventListener('click', () => closeSheet(menuSheet));
 
-/* ---- TMDB / OMDb API keys (used for the IMDb-link import below) ---- */
+/* ---- TMDB API key (used for the IMDb-link import below) ---- */
 const tmdbApiKeyInput = $('#tmdbApiKeyInput');
 tmdbApiKeyInput.value = settings.tmdbApiKey || '';
 tmdbApiKeyInput.addEventListener('change', () => {
   settings.tmdbApiKey = tmdbApiKeyInput.value.trim();
-  saveSettings(settings);
-});
-
-const omdbApiKeyInput = $('#omdbApiKeyInput');
-omdbApiKeyInput.value = settings.omdbApiKey || '';
-omdbApiKeyInput.addEventListener('change', () => {
-  settings.omdbApiKey = omdbApiKeyInput.value.trim();
   saveSettings(settings);
 });
 
