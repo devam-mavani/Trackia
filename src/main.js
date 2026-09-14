@@ -46,6 +46,7 @@ function loadSettings() {
     fontSize: 'medium',
     tileSize: 'medium',
     theme: { '--c-bg': '', '--c-surface': '', '--c-accent': '', '--c-text': '' },
+    tmdbApiKey: '',
   };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -584,16 +585,20 @@ const coverImg = $('#coverImg');
 const coverInitial = $('#coverInitial');
 const coverClearBtn = $('#coverClearBtn');
 const coverPicker = $('#coverPicker');
+const imdbImportRow = $('#imdbImportRow');
 
 function updateUnitLabels() {
   const type = f_type.value;
   const unit = UNIT_BY_TYPE[type] || 'progress';
   const isSeasonType = type === 'anime' || type === 'series';
   const isListType = type === 'list';
+  const supportsImdbImport = type === 'anime' || type === 'series' || type === 'movie';
 
   f_season_field.style.display = isSeasonType ? '' : 'none';
   f_progress_row.style.display = isListType ? 'none' : '';
   coverPicker.style.display = isListType ? 'none' : '';
+  imdbImportRow.style.display = supportsImdbImport ? '' : 'none';
+  imdbImportRow.style.display = isListType ? 'none' : '';
   if (isListType) {
     coverLinkRow.hidden = true;
     setCoverPreview(null);
@@ -701,6 +706,84 @@ coverLinkInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); useCoverLink(); }
 });
 
+/* ---- Import title + cover from an IMDb link (via TMDB's find-by-id API) ---- */
+const imdbLinkInput = $('#imdbLinkInput');
+const imdbFetchBtn = $('#imdbFetchBtn');
+
+function extractImdbId(text) {
+  const match = text.match(/tt\d{5,10}/);
+  return match ? match[0] : null;
+}
+
+async function fetchImdbImport() {
+  const raw = imdbLinkInput.value.trim();
+  const imdbId = extractImdbId(raw);
+  if (!imdbId) {
+    showToast('Paste a full IMDb link, e.g. imdb.com/title/tt1234567');
+    return;
+  }
+
+  const apiKey = settings.tmdbApiKey;
+  if (!apiKey) {
+    showToast('Add a free TMDB API key in Settings first');
+    return;
+  }
+
+  const originalLabel = imdbFetchBtn.textContent;
+  imdbFetchBtn.disabled = true;
+  imdbFetchBtn.textContent = 'Fetching…';
+
+  try {
+    const res = await fetch(
+      `https://api.themoviedb.org/3/find/${imdbId}?api_key=${encodeURIComponent(apiKey)}&external_source=imdb_id`
+    );
+    if (!res.ok) throw new Error('bad_response');
+    const data = await res.json();
+
+    const movie = data.movie_results && data.movie_results[0];
+    const tv = data.tv_results && data.tv_results[0];
+    const hit = movie || tv;
+
+    if (!hit) {
+      showToast("Couldn't find that title on TMDB");
+      return;
+    }
+
+    const title = hit.title || hit.name || '';
+    if (title) f_title.value = title;
+
+    f_type.value = movie ? 'movie' : 'series';
+    updateUnitLabels();
+    syncThemedSelect(f_type);
+
+    if (hit.poster_path) {
+      const posterUrl = `https://image.tmdb.org/t/p/w500${hit.poster_path}`;
+      try {
+        const imgRes = await fetch(posterUrl);
+        if (!imgRes.ok) throw new Error('bad_image');
+        const blob = await imgRes.blob();
+        setCoverPreview(await blobToDataUrl(blob), title);
+      } catch {
+        // Still works even if we can't embed the image locally — it'll just
+        // load live from TMDB instead of being cached offline.
+        setCoverPreview(posterUrl, title);
+      }
+    }
+
+    showToast('Imported from TMDB');
+  } catch (err) {
+    showToast("Couldn't reach TMDB — check your connection and API key");
+  } finally {
+    imdbFetchBtn.disabled = false;
+    imdbFetchBtn.textContent = originalLabel;
+  }
+}
+
+imdbFetchBtn.addEventListener('click', fetchImdbImport);
+imdbLinkInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); fetchImdbImport(); }
+});
+
 /* ---- Cover from clipboard ---- */
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
@@ -788,6 +871,7 @@ function resetForm() {
   form.reset();
   state.draftTags = [];
   state.editingId = null;
+  imdbLinkInput.value = '';
   coverLinkRow.hidden = true;
   coverLinkInput.value = '';
   setCoverPreview(null);
@@ -908,6 +992,14 @@ $('#themePreset').addEventListener('change', (e) => applyThemePreset(e.target.va
 
 $('#menuToggle').addEventListener('click', () => openSheet(menuSheet));
 $('#menuClose').addEventListener('click', () => closeSheet(menuSheet));
+
+/* ---- TMDB API key (used for the IMDb-link import below) ---- */
+const tmdbApiKeyInput = $('#tmdbApiKeyInput');
+tmdbApiKeyInput.value = settings.tmdbApiKey || '';
+tmdbApiKeyInput.addEventListener('change', () => {
+  settings.tmdbApiKey = tmdbApiKeyInput.value.trim();
+  saveSettings(settings);
+});
 
 $('#fontSizeSeg').addEventListener('click', (e) => {
   const btn = e.target.closest('button');

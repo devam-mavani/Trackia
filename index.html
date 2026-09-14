@@ -130,6 +130,18 @@
         </div>
 
         <form id="entryForm" class="sheet-body">
+          <div class="imdb-import-row" id="imdbImportRow">
+            <input
+              type="url"
+              id="imdbLinkInput"
+              placeholder="Paste an IMDb link to auto-fill"
+              inputmode="url"
+            />
+            <button type="button" class="btn-ghost" id="imdbFetchBtn">
+              Fetch
+            </button>
+          </div>
+
           <div class="cover-picker" id="coverPicker">
             <div class="cover-preview" id="coverPreview">
               <span id="coverInitial">+</span>
@@ -445,6 +457,28 @@
             <button class="btn-ghost" id="resetThemeBtn">
               Reset to default theme
             </button>
+          </div>
+
+          <div class="settings-group">
+            <h3>IMDb import</h3>
+            <p class="settings-hint">
+              Lets you paste an IMDb link in the entry form to auto-fill the
+              title and cover. IMDb itself doesn't offer a public API, so
+              this uses <strong>The Movie Database (TMDB)</strong>, a free,
+              community-run service — grab your own key at
+              themoviedb.org/settings/api and paste it below. Nothing is sent
+              anywhere except TMDB's servers, and only when you tap Fetch.
+            </p>
+            <label class="field">
+              <span>TMDB API key</span>
+              <input
+                type="text"
+                id="tmdbApiKeyInput"
+                placeholder="Paste your key here"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
           </div>
 
           <div class="settings-group">

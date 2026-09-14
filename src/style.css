@@ -943,6 +943,30 @@ textarea:focus-visible {
   min-width: 0;
 }
 
+.imdb-import-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.imdb-import-row input {
+  flex: 1;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  padding: 9px 12px;
+  color: var(--c-text);
+  font-size: 0.85rem;
+  min-width: 0;
+}
+.imdb-import-row .btn-ghost {
+  white-space: nowrap;
+  padding: 9px 16px;
+}
+.imdb-import-row .btn-ghost[disabled] {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
 .tag-input-wrap {
   background: var(--c-surface-2);
   border: 1px solid var(--c-border);
