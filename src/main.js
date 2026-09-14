@@ -724,6 +724,43 @@ function fetchWithTimeout(url, opts, ms = 12000) {
   return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
+// TMDB's settings page hands out two different credentials: a short
+// "API Key (v3 auth)" (~32 chars) and a long "API Read Access Token
+// (v4 auth)" JWT (100+ chars). Both are valid, but they're sent
+// differently — detect which one was pasted so either works, and build
+// a ready-to-fetch [url, opts] pair for any TMDB path + query params.
+function tmdbRequest(path, params = {}) {
+  const apiKey = settings.tmdbApiKey;
+  const isReadAccessToken = apiKey.length > 60;
+  const qs = new URLSearchParams(params);
+  if (!isReadAccessToken) qs.set('api_key', apiKey);
+  const query = qs.toString();
+  const url = `https://api.themoviedb.org/3${path}${query ? `?${query}` : ''}`;
+  const opts = isReadAccessToken
+    ? { headers: { Authorization: `Bearer ${apiKey}`, accept: 'application/json' } }
+    : undefined;
+  return [url, opts];
+}
+
+// Merge freshly-fetched genre names into the notes textarea as a single
+// "Genres: ..." line, replacing any previous genre line from an earlier
+// import but leaving the rest of whatever notes are already there intact.
+function applyGenresToNotes(genreNames) {
+  if (!genreNames.length) return;
+  const genreLine = `Genres: ${genreNames.join(', ')}`;
+  const existingLines = f_notes.value.split('\n');
+  const genreLineIndex = existingLines.findIndex((l) => l.trim().startsWith('Genres:'));
+
+  if (genreLineIndex !== -1) {
+    existingLines[genreLineIndex] = genreLine;
+    f_notes.value = existingLines.join('\n');
+  } else if (f_notes.value.trim()) {
+    f_notes.value = `${genreLine}\n${f_notes.value}`;
+  } else {
+    f_notes.value = genreLine;
+  }
+}
+
 async function fetchImdbImport() {
   const raw = imdbLinkInput.value.trim();
   const imdbId = extractImdbId(raw);
@@ -738,17 +775,7 @@ async function fetchImdbImport() {
     return;
   }
 
-  // TMDB's settings page hands out two different credentials: a short
-  // "API Key (v3 auth)" (~32 chars) and a long "API Read Access Token
-  // (v4 auth)" JWT (100+ chars). Both are valid, but they're sent
-  // differently — detect which one was pasted so either works.
-  const isReadAccessToken = apiKey.length > 60;
-  const url = isReadAccessToken
-    ? `https://api.themoviedb.org/3/find/${imdbId}?external_source=imdb_id`
-    : `https://api.themoviedb.org/3/find/${imdbId}?api_key=${encodeURIComponent(apiKey)}&external_source=imdb_id`;
-  const fetchOpts = isReadAccessToken
-    ? { headers: { Authorization: `Bearer ${apiKey}`, accept: 'application/json' } }
-    : undefined;
+  const [url, fetchOpts] = tmdbRequest(`/find/${imdbId}`, { external_source: 'imdb_id' });
 
   const originalLabel = imdbFetchBtn.textContent;
   imdbFetchBtn.disabled = true;
@@ -796,6 +823,23 @@ async function fetchImdbImport() {
         // load live from TMDB instead of being cached offline.
         setCoverPreview(posterUrl, title);
       }
+    }
+
+    // Genre names aren't in the /find response (only numeric genre_ids),
+    // so pull them from the movie/tv details endpoint and drop them into
+    // notes. This is best-effort: if it fails, the rest of the import
+    // above has already succeeded, so we just skip it quietly.
+    try {
+      const detailsPath = movie ? `/movie/${hit.id}` : `/tv/${hit.id}`;
+      const [detailsUrl, detailsOpts] = tmdbRequest(detailsPath);
+      const detailsRes = await fetchWithTimeout(detailsUrl, detailsOpts, 12000);
+      if (detailsRes.ok) {
+        const details = await detailsRes.json();
+        const genreNames = (details.genres || []).map((g) => g.name).filter(Boolean);
+        applyGenresToNotes(genreNames);
+      }
+    } catch (err) {
+      console.error('TMDB genre fetch failed:', err);
     }
 
     showToast('Imported from TMDB');
