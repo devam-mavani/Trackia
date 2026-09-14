@@ -715,6 +715,15 @@ function extractImdbId(text) {
   return match ? match[0] : null;
 }
 
+// Plain fetch() has no timeout — on a blocked/dropped connection (firewall,
+// ad-blocker, flaky carrier network) it can just hang forever with no error.
+// Force it to fail loudly instead.
+function fetchWithTimeout(url, opts, ms = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 async function fetchImdbImport() {
   const raw = imdbLinkInput.value.trim();
   const imdbId = extractImdbId(raw);
@@ -729,17 +738,36 @@ async function fetchImdbImport() {
     return;
   }
 
+  // TMDB's settings page hands out two different credentials: a short
+  // "API Key (v3 auth)" (~32 chars) and a long "API Read Access Token
+  // (v4 auth)" JWT (100+ chars). Both are valid, but they're sent
+  // differently — detect which one was pasted so either works.
+  const isReadAccessToken = apiKey.length > 60;
+  const url = isReadAccessToken
+    ? `https://api.themoviedb.org/3/find/${imdbId}?external_source=imdb_id`
+    : `https://api.themoviedb.org/3/find/${imdbId}?api_key=${encodeURIComponent(apiKey)}&external_source=imdb_id`;
+  const fetchOpts = isReadAccessToken
+    ? { headers: { Authorization: `Bearer ${apiKey}`, accept: 'application/json' } }
+    : undefined;
+
   const originalLabel = imdbFetchBtn.textContent;
   imdbFetchBtn.disabled = true;
   imdbFetchBtn.textContent = 'Fetching…';
 
   try {
-    const res = await fetch(
-      `https://api.themoviedb.org/3/find/${imdbId}?api_key=${encodeURIComponent(apiKey)}&external_source=imdb_id`
-    );
-    if (!res.ok) throw new Error('bad_response');
-    const data = await res.json();
+    const res = await fetchWithTimeout(url, fetchOpts);
 
+    if (res.status === 401) {
+      showToast('TMDB rejected that API key — double check it in Settings');
+      return;
+    }
+    if (!res.ok) {
+      showToast(`TMDB error (${res.status}) — try again shortly`);
+      console.error('TMDB find request failed:', res.status, await res.text().catch(() => ''));
+      return;
+    }
+
+    const data = await res.json();
     const movie = data.movie_results && data.movie_results[0];
     const tv = data.tv_results && data.tv_results[0];
     const hit = movie || tv;
@@ -759,7 +787,7 @@ async function fetchImdbImport() {
     if (hit.poster_path) {
       const posterUrl = `https://image.tmdb.org/t/p/w500${hit.poster_path}`;
       try {
-        const imgRes = await fetch(posterUrl);
+        const imgRes = await fetchWithTimeout(posterUrl, undefined, 12000);
         if (!imgRes.ok) throw new Error('bad_image');
         const blob = await imgRes.blob();
         setCoverPreview(await blobToDataUrl(blob), title);
@@ -772,7 +800,12 @@ async function fetchImdbImport() {
 
     showToast('Imported from TMDB');
   } catch (err) {
-    showToast("Couldn't reach TMDB — check your connection and API key");
+    if (err.name === 'AbortError') {
+      showToast('TMDB took too long to respond — check your connection and try again');
+    } else {
+      showToast("Couldn't reach TMDB — check your connection");
+    }
+    console.error('TMDB import failed:', err);
   } finally {
     imdbFetchBtn.disabled = false;
     imdbFetchBtn.textContent = originalLabel;
