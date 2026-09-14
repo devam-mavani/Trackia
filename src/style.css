@@ -15,7 +15,6 @@
 
   --fs-base: 15px;
   --tile-min: 155px;
-  --tile-cover-h: 190px;
 
   /* Apple-style easing: gentle deceleration for sheets/fades, a light
      overshoot ("spring") for anything that should feel tactile/poppy. */
@@ -61,15 +60,12 @@ body[data-font="large"] {
 
 body[data-tile="small"] {
   --tile-min: 128px;
-  --tile-cover-h: 150px;
 }
 body[data-tile="medium"] {
   --tile-min: 155px;
-  --tile-cover-h: 190px;
 }
 body[data-tile="large"] {
   --tile-min: 190px;
-  --tile-cover-h: 240px;
 }
 
 #app {
@@ -450,7 +446,7 @@ textarea:focus-visible {
 }
 
 .card-cover {
-  height: var(--tile-cover-h);
+  aspect-ratio: 2 / 3;
   position: relative;
   background: var(--c-surface-2);
   display: flex;
@@ -462,6 +458,11 @@ textarea:focus-visible {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  /* Biases the crop toward the top rather than dead-center — posters and
+     photos usually have their most important content (a face, a title)
+     in the upper two-thirds, so this loses less of it than a centered
+     crop does once the frame gets this much taller. */
+  object-position: center 20%;
 }
 .card-cover .initial {
   font-family: var(--font-display);

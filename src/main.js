@@ -973,7 +973,8 @@ async function fetchImdbImport() {
         const imgRes = await fetchWithTimeout(posterUrl, undefined, 12000);
         if (!imgRes.ok) throw new Error('bad_image');
         const blob = await imgRes.blob();
-        setCoverPreview(await blobToDataUrl(blob), title);
+        const dataUrl = await optimizeCoverImage(blob).catch(() => blobToDataUrl(blob));
+        setCoverPreview(dataUrl, title);
       } catch {
         // Still works even if we can't embed the image locally — it'll just
         // load live from TMDB instead of being cached offline.
@@ -1027,13 +1028,76 @@ function blobToDataUrl(blob) {
   });
 }
 
+/* ---- Cover image optimization ----
+   Every locally-embedded cover (camera/gallery photo, pasted image, TMDB
+   poster fetched to embed offline) gets run through here before it's
+   stored: center-cropped to a 2:3 poster ratio so covers of any original
+   shape fill the (now taller) card frame consistently instead of being
+   stretched or letterboxed, then downscaled and re-encoded as JPEG so a
+   multi-megabyte phone photo doesn't bloat localStorage. `source` can be
+   a Blob or an existing data: URL string. Remote "From link" covers are
+   left untouched — cross-origin canvas reads would just throw anyway,
+   and object-fit: cover on the card already keeps their aspect ratio
+   consistent visually regardless of the source image's real dimensions. */
+const COVER_TARGET_WIDTH = 480;
+const COVER_ASPECT = 2 / 3; // width / height
+
+function optimizeCoverImage(source, { maxWidth = COVER_TARGET_WIDTH, aspect = COVER_ASPECT, quality = 0.85 } = {}) {
+  return new Promise((resolve, reject) => {
+    const isBlob = source instanceof Blob;
+    const objectUrl = isBlob ? URL.createObjectURL(source) : null;
+    const cleanup = () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
+
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const srcW = img.naturalWidth;
+        const srcH = img.naturalHeight;
+        if (!srcW || !srcH) throw new Error('bad_dimensions');
+
+        // Center-crop horizontally, but bias vertical cropping toward the
+        // top (matching the CSS object-position on the card grid) — most
+        // photos/posters keep their important content in the upper part
+        // of the frame, and this now crops a fair bit off a taller source.
+        let cropW = srcW;
+        let cropH = srcW / aspect;
+        let sx = 0;
+        let sy = 0;
+        if (cropH > srcH) {
+          cropH = srcH;
+          cropW = srcH * aspect;
+          sx = (srcW - cropW) / 2;
+        } else {
+          sy = (srcH - cropH) * 0.2;
+        }
+        const outW = Math.round(Math.min(maxWidth, cropW));
+        const outH = Math.round(outW / aspect);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = outW;
+        canvas.height = outH;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, sx, sy, cropW, cropH, 0, 0, outW, outH);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      } catch (err) {
+        reject(err);
+      } finally {
+        cleanup();
+      }
+    };
+    img.onerror = () => { cleanup(); reject(new Error('image_decode_failed')); };
+    img.src = isBlob ? objectUrl : source;
+  });
+}
+
 async function useClipboardImage(clipboardItems) {
   for (const item of clipboardItems) {
     const type = item.types ? item.types.find((t) => t.startsWith('image/')) : item.type;
     if (!type || !type.startsWith('image/')) continue;
     const blob = item.getType ? await item.getType(type) : item.getAsFile();
     if (!blob) continue;
-    setCoverPreview(await blobToDataUrl(blob));
+    const dataUrl = await optimizeCoverImage(blob).catch(() => blobToDataUrl(blob));
+    setCoverPreview(dataUrl);
     return true;
   }
   return false;
@@ -1077,7 +1141,10 @@ $('#coverPickBtn').addEventListener('click', async () => {
       promptLabelPicture: 'Take photo',
       width: 600,
     });
-    if (photo?.dataUrl) setCoverPreview(photo.dataUrl);
+    if (photo?.dataUrl) {
+      const dataUrl = await optimizeCoverImage(photo.dataUrl).catch(() => photo.dataUrl);
+      setCoverPreview(dataUrl);
+    }
   } catch (err) {
     // User cancelled, or running in a plain browser without native camera support.
     if (!window.Capacitor?.isNativePlatform?.()) {
@@ -1090,12 +1157,16 @@ function fallbackFilePick() {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'image/*';
-  input.onchange = () => {
+  input.onchange = async () => {
     const file = input.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setCoverPreview(reader.result);
-    reader.readAsDataURL(file);
+    try {
+      setCoverPreview(await optimizeCoverImage(file));
+    } catch {
+      const reader = new FileReader();
+      reader.onload = () => setCoverPreview(reader.result);
+      reader.readAsDataURL(file);
+    }
   };
   input.click();
 }
@@ -1303,6 +1374,43 @@ document.querySelectorAll('.color-swatch').forEach((input) => {
 $('#resetThemeBtn').addEventListener('click', () => {
   applyThemePreset('default');
   showToast('Theme reset to default');
+});
+
+/* ---- Re-optimize covers saved before optimizeCoverImage existed ---- */
+$('#optimizeCoversBtn').addEventListener('click', async () => {
+  const btn = $('#optimizeCoversBtn');
+  // Only locally-embedded covers (data: URLs) can be reprocessed — a
+  // "From link" cover is a live remote URL with nothing stored locally to
+  // shrink, and re-fetching it here would need CORS the source may not
+  // grant, so those are left as they are.
+  const targets = entries.filter((e) => e.cover && e.cover.startsWith('data:'));
+  if (!targets.length) {
+    showToast('No locally-saved covers to optimize');
+    return;
+  }
+
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  let done = 0;
+  let changed = 0;
+
+  for (const e of targets) {
+    btn.textContent = `Optimizing… ${done + 1}/${targets.length}`;
+    try {
+      e.cover = await optimizeCoverImage(e.cover);
+      changed++;
+    } catch {
+      // Leave this one as-is and move on — a single undecodable image
+      // shouldn't stop the rest of the library from being processed.
+    }
+    done++;
+  }
+
+  saveEntries(entries);
+  render();
+  btn.disabled = false;
+  btn.textContent = originalLabel;
+  showToast(changed ? `Optimized ${changed} cover${changed === 1 ? '' : 's'}` : "Couldn't optimize any covers");
 });
 
 /* ---- Export / Import ---- */

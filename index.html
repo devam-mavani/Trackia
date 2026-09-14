@@ -506,6 +506,21 @@
           </div>
 
           <div class="settings-group">
+            <h3>Covers</h3>
+            <p class="settings-hint">
+              New covers (camera, gallery, paste, TMDB import) are
+              automatically cropped to a consistent poster shape and
+              compressed before they're saved. Covers added before this
+              existed are only cropped visually on screen — this reprocesses
+              and re-saves them the same way, which also shrinks how much
+              space they take up.
+            </p>
+            <div class="btn-row">
+              <button class="btn-ghost" id="optimizeCoversBtn">Optimize existing covers</button>
+            </div>
+          </div>
+
+          <div class="settings-group">
             <h3>Backup</h3>
             <p class="settings-hint">
               Export your library as a JSON file, or import one from another
