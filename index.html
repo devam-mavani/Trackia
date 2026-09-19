@@ -12,105 +12,203 @@
   </head>
   <body>
     <div id="app">
-      <!-- Top bar -->
-      <header class="topbar">
-        <div class="brand-wrap">
-          <img
-            src="/src/assets/logo.jpg"
-            alt=""
-            class="brand-logo"
-            
-            id="brandLogo"
-          />
-          <h1 class="brand">Trackia</h1>
-        </div>
-        <div class="topbar-actions">
-          <button
-            class="icon-btn"
-            id="searchToggle"
-            aria-label="Search"
-            title="Search"
-          >
-            <svg viewBox="0 0 24 24">
+      <!-- ==================================================================
+           PAGE: Home — search + at-a-glance rows built from your library
+           ================================================================== -->
+      <div class="page" id="page-home">
+        <header class="topbar">
+          <div class="brand-wrap">
+            <img
+              src="/src/assets/logo.jpg"
+              alt=""
+              class="brand-logo"
+              id="brandLogo"
+            />
+            <h1 class="brand">Trackia</h1>
+          </div>
+        </header>
+
+        <div class="home-search-wrap">
+          <div class="home-search">
+            <svg class="home-search-icon" viewBox="0 0 24 24">
               <path
                 d="M10.5 3a7.5 7.5 0 015.916 12.12l4.732 4.732-1.06 1.06-4.732-4.731A7.5 7.5 0 1110.5 3zm0 1.5a6 6 0 100 12 6 6 0 000-12z"
               />
             </svg>
-          </button>
-          <button
-            class="icon-btn"
-            id="menuToggle"
-            aria-label="Menu"
-            title="Menu"
-          >
+            <input
+              type="search"
+              id="homeSearchInput"
+              placeholder="Search a movie or show…"
+              autocomplete="off"
+            />
+          </div>
+          <div class="home-search-results" id="homeSearchResults" hidden></div>
+        </div>
+
+        <div class="home-sections" id="homeSections"></div>
+
+        <div class="empty-state" id="homeEmptyState" hidden>
+          <p class="empty-title">Your library is empty</p>
+          <p class="empty-sub">
+            Search above to add a movie or show, or use the Movies tab to add
+            anything manually.
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================================================================
+           PAGE: Library ("Movies") — the full tracked collection
+           ================================================================== -->
+      <div class="page" id="page-library" hidden>
+        <!-- Top bar -->
+        <header class="topbar">
+          <div class="brand-wrap">
+            <h1 class="brand">Your list</h1>
+          </div>
+          <div class="topbar-actions">
+            <button
+              class="icon-btn"
+              id="searchToggle"
+              aria-label="Search"
+              title="Search"
+            >
+              <svg viewBox="0 0 24 24">
+                <path
+                  d="M10.5 3a7.5 7.5 0 015.916 12.12l4.732 4.732-1.06 1.06-4.732-4.731A7.5 7.5 0 1110.5 3zm0 1.5a6 6 0 100 12 6 6 0 000-12z"
+                />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <!-- Search bar (collapsible) -->
+        <div class="searchbar" id="searchBar" hidden>
+          <input
+            type="search"
+            id="searchInput"
+            placeholder="Search title, tag, notes…"
+            autocomplete="off"
+          />
+        </div>
+
+        <!-- Type filter tabs -->
+        <nav class="type-tabs" id="typeTabs">
+          <button class="type-tab active" data-type="all">All</button>
+          <button class="type-tab" data-type="anime">Anime</button>
+          <button class="type-tab" data-type="series">Series</button>
+          <button class="type-tab" data-type="movie">Movies</button>
+          <button class="type-tab" data-type="book">Books</button>
+          <button class="type-tab" data-type="manga">Manga</button>
+          <button class="type-tab" data-type="list">List</button>
+        </nav>
+
+        <!-- Filter row -->
+        <div class="filter-row">
+          <select id="statusFilter" class="select" data-themed>
+            <option value="all">All statuses</option>
+            <option value="plan">Plan to start</option>
+            <option value="progress">In progress</option>
+            <option value="completed">Completed</option>
+            <option value="hold">On hold</option>
+            <option value="dropped">Dropped</option>
+          </select>
+          <select id="sortSelect" class="select" data-themed>
+            <option value="recent">Recently updated</option>
+            <option value="title">Title A–Z</option>
+            <option value="rating">Rating high–low</option>
+            <option value="progress">Progress high–low</option>
+          </select>
+        </div>
+
+        <!-- Card grid -->
+        <main class="grid" id="grid"></main>
+
+        <!-- Empty state -->
+        <div class="empty-state" id="emptyState" hidden>
+          <p class="empty-title">Nothing here yet</p>
+          <p class="empty-sub">
+            Add something you're watching, reading, or planning to start.
+          </p>
+        </div>
+
+        <!-- FAB tab + plus -->
+        <div class="fab-wrap">
+          <button class="fab-tab" id="fabTab" aria-label="Quick add tab"></button>
+          <button class="fab" id="fabAdd" aria-label="Add entry">
             <svg viewBox="0 0 24 24">
-              <path
-                d="M3 6h18v1.5H3V6zm0 5.25h18v1.5H3v-1.5zM3 16.5h18V18H3v-1.5z"
-              />
+              <path d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7V4z" />
             </svg>
           </button>
         </div>
-      </header>
-
-      <!-- Search bar (collapsible) -->
-      <div class="searchbar" id="searchBar" hidden>
-        <input
-          type="search"
-          id="searchInput"
-          placeholder="Search title, tag, notes…"
-          autocomplete="off"
-        />
       </div>
 
-      <!-- Type filter tabs -->
-      <nav class="type-tabs" id="typeTabs">
-        <button class="type-tab active" data-type="all">All</button>
-        <button class="type-tab" data-type="anime">Anime</button>
-        <button class="type-tab" data-type="series">Series</button>
-        <button class="type-tab" data-type="movie">Movies</button>
-        <button class="type-tab" data-type="book">Books</button>
-        <button class="type-tab" data-type="manga">Manga</button>
-        <button class="type-tab" data-type="list">List</button>
-      </nav>
+      <!-- ==================================================================
+           PAGE: Profile — brief stats + entry point to settings
+           ================================================================== -->
+      <div class="page" id="page-profile" hidden>
+        <header class="topbar">
+          <div class="brand-wrap">
+            <h1 class="brand">Profile</h1>
+          </div>
+        </header>
 
-      <!-- Filter row -->
-      <div class="filter-row">
-        <select id="statusFilter" class="select" data-themed>
-          <option value="all">All statuses</option>
-          <option value="plan">Plan to start</option>
-          <option value="progress">In progress</option>
-          <option value="completed">Completed</option>
-          <option value="hold">On hold</option>
-          <option value="dropped">Dropped</option>
-        </select>
-        <select id="sortSelect" class="select" data-themed>
-          <option value="recent">Recently updated</option>
-          <option value="title">Title A–Z</option>
-          <option value="rating">Rating high–low</option>
-          <option value="progress">Progress high–low</option>
-        </select>
+        <div class="profile-body">
+          <div class="profile-avatar-row">
+            <div class="profile-avatar" id="profileAvatar">T</div>
+            <div class="profile-id">
+              <div class="profile-name">Your library</div>
+              <div class="profile-sub" id="profileSummary">0 titles tracked</div>
+            </div>
+          </div>
+
+          <div class="stats-grid" id="statsGrid"></div>
+
+          <div class="settings-group">
+            <h3>Breakdown</h3>
+            <div class="breakdown-list" id="breakdownList"></div>
+          </div>
+
+          <button class="settings-row" id="openSettingsBtn" type="button">
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"
+              />
+            </svg>
+            <span>Settings</span>
+            <svg class="chev" viewBox="0 0 24 24">
+              <path d="M8.6 5.4L15.2 12l-6.6 6.6-1.4-1.4L12.4 12 7.2 6.8z" />
+            </svg>
+          </button>
+
+          <p class="version-tag">Trackia · offline-first tracker</p>
+        </div>
       </div>
 
-      <!-- Card grid -->
-      <main class="grid" id="grid"></main>
-
-      <!-- Empty state -->
-      <div class="empty-state" id="emptyState" hidden>
-        <p class="empty-title">Nothing here yet</p>
-        <p class="empty-sub">
-          Add something you're watching, reading, or planning to start.
-        </p>
-      </div>
-
-      <!-- FAB tab + plus -->
-      <div class="fab-wrap">
-        <button class="fab-tab" id="fabTab" aria-label="Quick add tab"></button>
-        <button class="fab" id="fabAdd" aria-label="Add entry">
-          <svg viewBox="0 0 24 24">
-            <path d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7V4z" />
-          </svg>
+      <!-- ==================================================================
+           Floating bottom navigation
+           ================================================================== -->
+      <nav class="bottom-nav" id="bottomNav">
+        <button class="nav-btn active" data-page="home" aria-label="Home">
+          <svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" /></svg>
+          <span>Home</span>
         </button>
-      </div>
+        <button class="nav-btn" data-page="library" aria-label="Movies">
+          <svg viewBox="0 0 24 24">
+            <path
+              d="M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z"
+            />
+          </svg>
+          <span>Movies</span>
+        </button>
+        <button class="nav-btn" data-page="profile" aria-label="Profile">
+          <svg viewBox="0 0 24 24">
+            <path
+              d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"
+            />
+          </svg>
+          <span>Profile</span>
+        </button>
+      </nav>
 
       <!-- Backdrop -->
       <div class="backdrop" id="backdrop" hidden></div>

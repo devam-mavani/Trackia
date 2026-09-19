@@ -75,6 +75,7 @@ const state = {
   editingId: null,
   draftTags: [],
   draftCover: null,
+  draftTmdbId: null,
 };
 
 /* ---------------------------------------------------------------------- */
@@ -90,6 +91,34 @@ const entrySheet = $('#entrySheet');
 const menuSheet = $('#menuSheet');
 const detailSheet = $('#detailSheet');
 const ALL_SHEETS = [entrySheet, menuSheet, detailSheet];
+
+/* ---------------------------------------------------------------------- */
+/*  Pages (Home / Library / Profile) + bottom nav                         */
+/* ---------------------------------------------------------------------- */
+
+const PAGES = {
+  home: $('#page-home'),
+  library: $('#page-library'),
+  profile: $('#page-profile'),
+};
+const bottomNav = $('#bottomNav');
+let currentPage = 'home';
+
+function showPage(name) {
+  if (!PAGES[name]) return;
+  currentPage = name;
+  Object.entries(PAGES).forEach(([key, el]) => { el.hidden = key !== name; });
+  bottomNav.querySelectorAll('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.page === name));
+  window.scrollTo({ top: 0 });
+  if (name === 'home') renderHome();
+  if (name === 'profile') renderProfile();
+}
+
+bottomNav.addEventListener('click', (e) => {
+  const btn = e.target.closest('.nav-btn');
+  if (!btn) return;
+  showPage(btn.dataset.page);
+});
 
 /* ---------------------------------------------------------------------- */
 /*  Init settings application                                              */
@@ -351,7 +380,305 @@ function bumpProgress(id) {
   e.updatedAt = Date.now();
   saveEntries(entries);
   render();
+  if (currentPage === 'home') renderHome();
 }
+
+/* ---------------------------------------------------------------------- */
+/*  Home page — rows built from the current library                       */
+/* ---------------------------------------------------------------------- */
+
+const homeSections = $('#homeSections');
+const homeEmptyState = $('#homeEmptyState');
+
+function hcardProgressPct(e) {
+  if (e.total) return Math.min(100, Math.round((e.progress / e.total) * 100));
+  return e.status === 'completed' ? 100 : 0;
+}
+
+function renderHCard(e) {
+  const card = document.createElement('article');
+  card.className = 'hcard';
+  card.dataset.id = e.id;
+
+  const cover = document.createElement('div');
+  cover.className = 'hcard-cover';
+  cover.style.background = e.cover ? 'transparent' : colorForString(e.title || e.id);
+
+  if (e.cover) {
+    const img = document.createElement('img');
+    img.src = e.cover;
+    img.alt = e.title;
+    img.addEventListener('error', () => {
+      img.remove();
+      const span = document.createElement('span');
+      span.className = 'initial';
+      span.textContent = initials(e.title);
+      cover.insertBefore(span, cover.firstChild);
+    });
+    cover.appendChild(img);
+  } else {
+    const span = document.createElement('span');
+    span.className = 'initial';
+    span.textContent = initials(e.title);
+    cover.appendChild(span);
+  }
+
+  if (e.rating) {
+    const rating = document.createElement('span');
+    rating.className = 'hcard-rating';
+    rating.textContent = `★ ${e.rating}`;
+    cover.appendChild(rating);
+  }
+
+  if (e.status === 'progress') {
+    const track = document.createElement('div');
+    track.className = 'hcard-progress';
+    const fill = document.createElement('div');
+    fill.className = 'hcard-progress-fill';
+    fill.style.width = hcardProgressPct(e) + '%';
+    track.appendChild(fill);
+    cover.appendChild(track);
+  }
+
+  const title = document.createElement('div');
+  title.className = 'hcard-title';
+  title.textContent = e.title;
+
+  const sub = document.createElement('div');
+  sub.className = 'hcard-sub';
+  sub.textContent = STATUS_LABEL[e.status] || e.status;
+
+  card.appendChild(cover);
+  card.appendChild(title);
+  card.appendChild(sub);
+  card.addEventListener('click', () => openDetailSheet(e.id));
+  return card;
+}
+
+function renderHRow(title, list, onSeeAll) {
+  if (!list.length) return null;
+  const section = document.createElement('section');
+  section.className = 'hrow';
+
+  const head = document.createElement('div');
+  head.className = 'hrow-head';
+  head.innerHTML = `<h2>${escapeHtml(title)}${onSeeAll ? '<svg class="chev" viewBox="0 0 24 24"><path d="M8.6 5.4L15.2 12l-6.6 6.6-1.4-1.4L12.4 12 7.2 6.8z"/></svg>' : ''}</h2>`;
+  if (onSeeAll) head.addEventListener('click', onSeeAll);
+  section.appendChild(head);
+
+  const scroll = document.createElement('div');
+  scroll.className = 'hscroll';
+  list.forEach((e) => scroll.appendChild(renderHCard(e)));
+  section.appendChild(scroll);
+
+  return section;
+}
+
+function renderHome() {
+  homeSections.innerHTML = '';
+  const trackable = entries.filter((e) => e.type !== 'list');
+  homeEmptyState.hidden = entries.length !== 0;
+
+  const continueWatching = trackable
+    .filter((e) => e.status === 'progress')
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .slice(0, 15);
+
+  const recentlyAdded = trackable
+    .slice()
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+    .slice(0, 15);
+
+  const topRated = trackable
+    .filter((e) => e.rating > 0)
+    .sort((a, b) => b.rating - a.rating)
+    .slice(0, 15);
+
+  const planToStart = trackable
+    .filter((e) => e.status === 'plan')
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .slice(0, 15);
+
+  const goToLibrary = (statusFilter) => () => {
+    showPage('library');
+    state.statusFilter = statusFilter;
+    $('#statusFilter').value = statusFilter;
+    syncThemedSelect($('#statusFilter'));
+    render();
+  };
+
+  const rows = [
+    renderHRow('Continue watching', continueWatching, goToLibrary('progress')),
+    renderHRow('Recently added', recentlyAdded, goToLibrary('all')),
+    renderHRow('Top rated', topRated, goToLibrary('all')),
+    renderHRow('Plan to start', planToStart, goToLibrary('plan')),
+  ].filter(Boolean);
+
+  rows.forEach((row) => homeSections.appendChild(row));
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Home page — TMDB title search (add-by-search)                         */
+/* ---------------------------------------------------------------------- */
+
+const homeSearchInput = $('#homeSearchInput');
+const homeSearchResults = $('#homeSearchResults');
+let homeSearchTimer = null;
+let homeSearchToken = 0;
+
+function showSearchStatus(html) {
+  homeSearchResults.innerHTML = `<div class="search-status-msg">${html}</div>`;
+  homeSearchResults.hidden = false;
+}
+
+function tmdbYear(hit) {
+  const d = hit.release_date || hit.first_air_date || '';
+  return d ? d.slice(0, 4) : '';
+}
+
+function renderSearchHits(hits) {
+  homeSearchResults.innerHTML = '';
+  if (!hits.length) {
+    showSearchStatus("No matches on TMDB — try a different title.");
+    return;
+  }
+  hits.forEach((hit) => {
+    const mediaType = hit.media_type === 'movie' ? 'movie' : 'tv';
+    const title = hit.title || hit.name || 'Untitled';
+    const row = document.createElement('div');
+    row.className = 'search-hit';
+
+    const cover = document.createElement('div');
+    cover.className = 'search-hit-cover';
+    if (hit.poster_path) {
+      const img = document.createElement('img');
+      img.src = `https://image.tmdb.org/t/p/w200${hit.poster_path}`;
+      img.alt = '';
+      cover.appendChild(img);
+    } else {
+      cover.style.background = colorForString(title);
+      const span = document.createElement('span');
+      span.className = 'initial';
+      span.textContent = initials(title);
+      cover.appendChild(span);
+    }
+
+    const info = document.createElement('div');
+    info.className = 'search-hit-info';
+    const year = tmdbYear(hit);
+    info.innerHTML = `
+      <div class="search-hit-title">${escapeHtml(title)}</div>
+      <div class="search-hit-meta">${year ? escapeHtml(year) + ' · ' : ''}${mediaType === 'movie' ? 'Movie' : 'Series'}</div>
+    `;
+
+    const alreadyHave = entries.find((e) => e.tmdbId && String(e.tmdbId) === String(hit.id));
+    const tag = document.createElement('span');
+    tag.className = 'search-hit-tag';
+    tag.textContent = alreadyHave ? 'In list' : '+ Add';
+
+    row.appendChild(cover);
+    row.appendChild(info);
+    row.appendChild(tag);
+
+    row.addEventListener('click', () => {
+      homeSearchResults.hidden = true;
+      homeSearchInput.blur();
+      if (alreadyHave) {
+        openDetailSheet(alreadyHave.id);
+      } else {
+        openEntrySheetFromSearch(hit, mediaType);
+      }
+    });
+
+    homeSearchResults.appendChild(row);
+  });
+  homeSearchResults.hidden = false;
+}
+
+async function runHomeSearch(query) {
+  const apiKey = settings.tmdbApiKey;
+  if (!apiKey) {
+    showSearchStatus('Add a free TMDB API key in <button type="button" class="link-btn" id="searchOpenSettingsLink">Settings</button> to search.');
+    const link = $('#searchOpenSettingsLink');
+    if (link) link.addEventListener('click', () => { homeSearchResults.hidden = true; showPage('profile'); setTimeout(() => openSheet(menuSheet), 200); });
+    return;
+  }
+
+  const token = ++homeSearchToken;
+  showSearchStatus('Searching…');
+  try {
+    const [url, opts] = tmdbRequest('/search/multi', { query, include_adult: 'false' });
+    const res = await fetchWithTimeout(url, opts, 12000);
+    if (token !== homeSearchToken) return; // a newer keystroke superseded this request
+    if (res.status === 401) { showSearchStatus('TMDB rejected that API key — double check it in Settings.'); return; }
+    if (!res.ok) { showSearchStatus('TMDB error — try again shortly.'); return; }
+    const data = await res.json();
+    const hits = (data.results || []).filter((r) => r.media_type === 'movie' || r.media_type === 'tv').slice(0, 10);
+    if (token !== homeSearchToken) return;
+    renderSearchHits(hits);
+  } catch (err) {
+    if (token !== homeSearchToken) return;
+    showSearchStatus(err.name === 'AbortError' ? 'TMDB took too long to respond.' : "Couldn't reach TMDB — check your connection.");
+  }
+}
+
+homeSearchInput.addEventListener('input', () => {
+  const q = homeSearchInput.value.trim();
+  clearTimeout(homeSearchTimer);
+  if (!q) { homeSearchResults.hidden = true; homeSearchResults.innerHTML = ''; return; }
+  if (q.length < 2) { showSearchStatus('Keep typing…'); return; }
+  homeSearchTimer = setTimeout(() => runHomeSearch(q), 450);
+});
+
+homeSearchInput.addEventListener('focus', () => {
+  if (homeSearchInput.value.trim().length >= 2 && homeSearchResults.innerHTML) homeSearchResults.hidden = false;
+});
+
+document.addEventListener('click', (e) => {
+  if (homeSearchResults.hidden) return;
+  if (homeSearchResults.contains(e.target) || homeSearchInput.contains(e.target)) return;
+  homeSearchResults.hidden = true;
+});
+
+/* ---------------------------------------------------------------------- */
+/*  Profile page — brief stats + entry point to Settings                  */
+/* ---------------------------------------------------------------------- */
+
+const statsGrid = $('#statsGrid');
+const breakdownList = $('#breakdownList');
+const profileSummary = $('#profileSummary');
+const profileAvatar = $('#profileAvatar');
+
+function renderProfile() {
+  const total = entries.length;
+  const completed = entries.filter((e) => e.status === 'completed').length;
+  const inProgress = entries.filter((e) => e.status === 'progress').length;
+  const rated = entries.filter((e) => e.rating > 0);
+  const avgRating = rated.length ? (rated.reduce((sum, e) => sum + e.rating, 0) / rated.length).toFixed(1) : '—';
+
+  profileSummary.textContent = `${total} title${total === 1 ? '' : 's'} tracked`;
+  profileAvatar.textContent = total ? initials(entries[0].title) : 'T';
+
+  statsGrid.innerHTML = `
+    <div class="stat-card"><div class="stat-value">${total}</div><div class="stat-label">Total</div></div>
+    <div class="stat-card"><div class="stat-value">${completed}</div><div class="stat-label">Completed</div></div>
+    <div class="stat-card"><div class="stat-value">${inProgress}</div><div class="stat-label">In progress</div></div>
+    <div class="stat-card"><div class="stat-value">${avgRating}</div><div class="stat-label">Avg rating</div></div>
+  `;
+
+  const typeCounts = {};
+  entries.forEach((e) => { typeCounts[e.type] = (typeCounts[e.type] || 0) + 1; });
+  breakdownList.innerHTML = Object.keys(TYPE_LABEL)
+    .filter((t) => typeCounts[t])
+    .map((t) => `
+      <div class="breakdown-row">
+        <span class="b-label">${escapeHtml(TYPE_LABEL[t])}</span>
+        <span class="b-value">${typeCounts[t]}</span>
+      </div>
+    `).join('') || '<div class="breakdown-row"><span class="b-label">Nothing tracked yet</span></div>';
+}
+
+$('#openSettingsBtn').addEventListener('click', () => openSheet(menuSheet));
 
 /* ---------------------------------------------------------------------- */
 /*  Detail sheet (title card)                                              */
@@ -499,6 +826,7 @@ $('#detailDeleteBtn').addEventListener('click', () => {
   entries = entries.filter((x) => x.id !== detailId);
   saveEntries(entries);
   render();
+  if (currentPage === 'home') renderHome();
   closeDetailCard();
   showToast('Entry deleted');
 });
@@ -917,6 +1245,52 @@ function applyGenresToNotes(genreNames) {
   }
 }
 
+// Applies a TMDB search/find result to the (already open) entry form: title,
+// type, cover art (embedded locally when possible), and a best-effort
+// "Genres: ..." notes line. Shared by the IMDb-link import below and the
+// Home page's title search. `mediaType` is 'movie' or 'tv'.
+async function importTmdbHit(hit, mediaType) {
+  const title = hit.title || hit.name || '';
+  if (title) f_title.value = title;
+
+  f_type.value = mediaType === 'movie' ? 'movie' : 'series';
+  updateUnitLabels();
+  syncThemedSelect(f_type);
+  state.draftTmdbId = hit.id != null ? String(hit.id) : null;
+
+  if (hit.poster_path) {
+    const posterUrl = `https://image.tmdb.org/t/p/w500${hit.poster_path}`;
+    try {
+      const imgRes = await fetchWithTimeout(posterUrl, undefined, 12000);
+      if (!imgRes.ok) throw new Error('bad_image');
+      const blob = await imgRes.blob();
+      const dataUrl = await optimizeCoverImage(blob).catch(() => blobToDataUrl(blob));
+      setCoverPreview(dataUrl, title);
+    } catch {
+      // Still works even if we can't embed the image locally — it'll just
+      // load live from TMDB instead of being cached offline.
+      setCoverPreview(posterUrl, title);
+    }
+  }
+
+  // Genre names aren't in the /find or /search response (only numeric
+  // genre_ids), so pull them from the movie/tv details endpoint and drop
+  // them into notes. Best-effort: if it fails, the rest of the import
+  // above has already succeeded, so we just skip it quietly.
+  try {
+    const detailsPath = mediaType === 'movie' ? `/movie/${hit.id}` : `/tv/${hit.id}`;
+    const [detailsUrl, detailsOpts] = tmdbRequest(detailsPath);
+    const detailsRes = await fetchWithTimeout(detailsUrl, detailsOpts, 12000);
+    if (detailsRes.ok) {
+      const details = await detailsRes.json();
+      const genreNames = (details.genres || []).map((g) => g.name).filter(Boolean);
+      applyGenresToNotes(genreNames);
+    }
+  } catch (err) {
+    console.error('TMDB genre fetch failed:', err);
+  }
+}
+
 async function fetchImdbImport() {
   const raw = imdbLinkInput.value.trim();
   const imdbId = extractImdbId(raw);
@@ -960,45 +1334,7 @@ async function fetchImdbImport() {
       return;
     }
 
-    const title = hit.title || hit.name || '';
-    if (title) f_title.value = title;
-
-    f_type.value = movie ? 'movie' : 'series';
-    updateUnitLabels();
-    syncThemedSelect(f_type);
-
-    if (hit.poster_path) {
-      const posterUrl = `https://image.tmdb.org/t/p/w500${hit.poster_path}`;
-      try {
-        const imgRes = await fetchWithTimeout(posterUrl, undefined, 12000);
-        if (!imgRes.ok) throw new Error('bad_image');
-        const blob = await imgRes.blob();
-        const dataUrl = await optimizeCoverImage(blob).catch(() => blobToDataUrl(blob));
-        setCoverPreview(dataUrl, title);
-      } catch {
-        // Still works even if we can't embed the image locally — it'll just
-        // load live from TMDB instead of being cached offline.
-        setCoverPreview(posterUrl, title);
-      }
-    }
-
-    // Genre names aren't in the /find response (only numeric genre_ids),
-    // so pull them from the movie/tv details endpoint and drop them into
-    // notes. This is best-effort: if it fails, the rest of the import
-    // above has already succeeded, so we just skip it quietly.
-    try {
-      const detailsPath = movie ? `/movie/${hit.id}` : `/tv/${hit.id}`;
-      const [detailsUrl, detailsOpts] = tmdbRequest(detailsPath);
-      const detailsRes = await fetchWithTimeout(detailsUrl, detailsOpts, 12000);
-      if (detailsRes.ok) {
-        const details = await detailsRes.json();
-        const genreNames = (details.genres || []).map((g) => g.name).filter(Boolean);
-        applyGenresToNotes(genreNames);
-      }
-    } catch (err) {
-      console.error('TMDB genre fetch failed:', err);
-    }
-
+    await importTmdbHit(hit, movie ? 'movie' : 'tv');
     showToast('Imported from TMDB');
   } catch (err) {
     if (err.name === 'AbortError') {
@@ -1017,6 +1353,19 @@ imdbFetchBtn.addEventListener('click', fetchImdbImport);
 imdbLinkInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); fetchImdbImport(); }
 });
+
+// Opens a fresh entry sheet pre-filled from a Home page search result.
+async function openEntrySheetFromSearch(hit, mediaType) {
+  openEntrySheet(null);
+  showToast('Importing from TMDB…');
+  try {
+    await importTmdbHit(hit, mediaType);
+    showToast('Imported — review and save');
+  } catch (err) {
+    console.error('TMDB import failed:', err);
+    showToast("Couldn't reach TMDB — check your connection");
+  }
+}
 
 /* ---- Cover from clipboard ---- */
 function blobToDataUrl(blob) {
@@ -1175,6 +1524,7 @@ function resetForm() {
   form.reset();
   state.draftTags = [];
   state.editingId = null;
+  state.draftTmdbId = null;
   imdbLinkInput.value = '';
   coverLinkRow.hidden = true;
   coverLinkInput.value = '';
@@ -1214,6 +1564,7 @@ function openEntrySheet(id) {
         f_richNotes.innerHTML = '';
       }
       state.draftTags = [...(e.tags || [])];
+      state.draftTmdbId = e.tmdbId || null;
       setCoverPreview(e.cover || null, e.title);
       renderTagChips();
       updateUnitLabels();
@@ -1255,6 +1606,7 @@ form.addEventListener('submit', (e) => {
     notes,
     tags: state.draftTags.slice(),
     cover: state.draftCover,
+    tmdbId: state.draftTmdbId,
     updatedAt: Date.now(),
   };
 
@@ -1267,6 +1619,7 @@ form.addEventListener('submit', (e) => {
 
   saveEntries(entries);
   render();
+  if (currentPage === 'home') renderHome();
   closeSheet(entrySheet);
   showToast(state.editingId ? 'Entry updated' : 'Entry added');
 });
@@ -1277,6 +1630,7 @@ deleteEntryBtn.addEventListener('click', () => {
   entries = entries.filter((x) => x.id !== state.editingId);
   saveEntries(entries);
   render();
+  if (currentPage === 'home') renderHome();
   closeSheet(entrySheet);
   showToast('Entry deleted');
 });
@@ -1312,7 +1666,6 @@ function applyThemePreset(name) {
 
 $('#themePreset').addEventListener('change', (e) => applyThemePreset(e.target.value));
 
-$('#menuToggle').addEventListener('click', () => openSheet(menuSheet));
 $('#menuClose').addEventListener('click', () => closeSheet(menuSheet));
 
 /* ---- TMDB API key (used for the IMDb-link import below) ---- */
@@ -1488,6 +1841,7 @@ $('#importFile').addEventListener('change', async (e) => {
         notes: raw.notes || '',
         tags: Array.isArray(raw.tags) ? raw.tags : [],
         cover: raw.cover || null,
+        tmdbId: raw.tmdbId || null,
         createdAt: raw.createdAt || Date.now(),
         updatedAt: raw.updatedAt || Date.now(),
       });
@@ -1496,6 +1850,7 @@ $('#importFile').addEventListener('change', async (e) => {
 
     saveEntries(entries);
     render();
+    if (currentPage === 'home') renderHome();
     showToast(`Imported ${added} entr${added === 1 ? 'y' : 'ies'}`);
   } catch (err) {
     showToast('Could not read that file');
@@ -1623,3 +1978,4 @@ initThemedSelects();
 applySettings();
 updateUnitLabels();
 render();
+showPage('home');
