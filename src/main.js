@@ -76,6 +76,7 @@ const state = {
   draftTags: [],
   draftCover: null,
   draftTmdbId: null,
+  draftGenreIds: [],
 };
 
 /* ---------------------------------------------------------------------- */
@@ -455,8 +456,9 @@ function renderHCard(e) {
   return card;
 }
 
-function renderHRow(title, list, onSeeAll) {
+function renderHRow(title, list, opts = {}) {
   if (!list.length) return null;
+  const { onSeeAll, cardRenderer = renderHCard } = opts;
   const section = document.createElement('section');
   section.className = 'hrow';
 
@@ -468,13 +470,153 @@ function renderHRow(title, list, onSeeAll) {
 
   const scroll = document.createElement('div');
   scroll.className = 'hscroll';
-  list.forEach((e) => scroll.appendChild(renderHCard(e)));
+  list.forEach((item) => scroll.appendChild(cardRenderer(item)));
   section.appendChild(scroll);
 
   return section;
 }
 
+/* ---- TMDB-sourced cards (trending / genre picks — not yet in the library) ---- */
+function renderTmdbCard(hit) {
+  const mediaType = hit.media_type === 'tv' ? 'tv' : 'movie';
+  const title = hit.title || hit.name || 'Untitled';
+
+  const card = document.createElement('article');
+  card.className = 'hcard';
+
+  const cover = document.createElement('div');
+  cover.className = 'hcard-cover';
+
+  if (hit.poster_path) {
+    const img = document.createElement('img');
+    img.src = `https://image.tmdb.org/t/p/w300${hit.poster_path}`;
+    img.alt = title;
+    cover.appendChild(img);
+  } else {
+    cover.style.background = colorForString(title);
+    const span = document.createElement('span');
+    span.className = 'initial';
+    span.textContent = initials(title);
+    cover.appendChild(span);
+  }
+
+  const owned = entries.find((e) => e.tmdbId && String(e.tmdbId) === String(hit.id));
+  if (owned) {
+    const badge = document.createElement('span');
+    badge.className = 'hcard-rating';
+    badge.textContent = 'In list';
+    cover.appendChild(badge);
+  } else if (hit.vote_average) {
+    const badge = document.createElement('span');
+    badge.className = 'hcard-rating';
+    badge.textContent = `★ ${hit.vote_average.toFixed(1)}`;
+    cover.appendChild(badge);
+  }
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'hcard-title';
+  titleEl.textContent = title;
+
+  const sub = document.createElement('div');
+  sub.className = 'hcard-sub';
+  sub.textContent = mediaType === 'movie' ? 'Movie' : 'Series';
+
+  card.appendChild(cover);
+  card.appendChild(titleEl);
+  card.appendChild(sub);
+  card.addEventListener('click', () => {
+    if (owned) openDetailSheet(owned.id);
+    else openEntrySheetFromSearch(hit, mediaType);
+  });
+  return card;
+}
+
+/* ---- TMDB trending / genre-based recommendation caching ----
+   Kept in memory only (not persisted) and reused for a few minutes so
+   revisiting the Home tab doesn't refire these requests every time. */
+const TMDB_CACHE_TTL = 10 * 60 * 1000;
+let trendingCache = null; // { at, items }
+let genreNameCache = null; // { at, map }
+const recommendedCache = {}; // genreId -> { at, items }
+
+async function getTrendingCached() {
+  if (trendingCache && Date.now() - trendingCache.at < TMDB_CACHE_TTL) return trendingCache.items;
+  const [url, opts] = tmdbRequest('/trending/all/week');
+  const res = await fetchWithTimeout(url, opts, 12000);
+  if (!res.ok) throw new Error('trending_failed');
+  const data = await res.json();
+  const items = (data.results || []).filter((r) => r.media_type === 'movie' || r.media_type === 'tv').slice(0, 15);
+  trendingCache = { at: Date.now(), items };
+  return items;
+}
+
+async function getGenreNameMap() {
+  if (genreNameCache && Date.now() - genreNameCache.at < TMDB_CACHE_TTL) return genreNameCache.map;
+  const [url, opts] = tmdbRequest('/genre/movie/list');
+  const res = await fetchWithTimeout(url, opts, 12000);
+  const map = new Map();
+  if (res.ok) {
+    const data = await res.json();
+    (data.genres || []).forEach((g) => map.set(g.id, g.name));
+  }
+  genreNameCache = { at: Date.now(), map };
+  return map;
+}
+
+// Most common genre across the library, weighted slightly by rating so a
+// well-liked title counts a bit more than an unrated one.
+function topGenreId() {
+  const counts = new Map();
+  entries.forEach((e) => {
+    (e.genreIds || []).forEach((id) => {
+      counts.set(id, (counts.get(id) || 0) + 1 + (e.rating ? e.rating / 10 : 0));
+    });
+  });
+  let best = null;
+  let bestCount = 0;
+  counts.forEach((count, id) => { if (count > bestCount) { bestCount = count; best = id; } });
+  return best;
+}
+
+async function getRecommendedCached(genreId) {
+  const cached = recommendedCache[genreId];
+  if (cached && Date.now() - cached.at < TMDB_CACHE_TTL) return cached.items;
+  const [url, opts] = tmdbRequest('/discover/movie', { with_genres: String(genreId), sort_by: 'popularity.desc' });
+  const res = await fetchWithTimeout(url, opts, 12000);
+  if (!res.ok) throw new Error('discover_failed');
+  const data = await res.json();
+  const items = (data.results || []).slice(0, 15).map((r) => ({ ...r, media_type: 'movie' }));
+  recommendedCache[genreId] = { at: Date.now(), items };
+  return items;
+}
+
+let homeRenderToken = 0;
+
+async function renderTmdbDiscoveryRows(token) {
+  try {
+    const trending = await getTrendingCached();
+    if (token !== homeRenderToken) return;
+    const row = renderHRow('Trending this week', trending, { cardRenderer: renderTmdbCard });
+    if (row) homeSections.appendChild(row);
+  } catch (err) {
+    console.error('TMDB trending fetch failed:', err);
+  }
+
+  const genreId = topGenreId();
+  if (genreId == null) return;
+  try {
+    const [recs, genreMap] = await Promise.all([getRecommendedCached(genreId), getGenreNameMap()]);
+    if (token !== homeRenderToken) return;
+    const genreName = genreMap.get(genreId) || 'this genre';
+    const row = renderHRow(`Because you like ${genreName}`, recs, { cardRenderer: renderTmdbCard });
+    if (row) homeSections.appendChild(row);
+  } catch (err) {
+    console.error('TMDB recommendation fetch failed:', err);
+  }
+}
+
 function renderHome() {
+  const token = ++homeRenderToken;
   homeSections.innerHTML = '';
   const trackable = entries.filter((e) => e.type !== 'list');
   homeEmptyState.hidden = entries.length !== 0;
@@ -508,13 +650,26 @@ function renderHome() {
   };
 
   const rows = [
-    renderHRow('Continue watching', continueWatching, goToLibrary('progress')),
-    renderHRow('Recently added', recentlyAdded, goToLibrary('all')),
-    renderHRow('Top rated', topRated, goToLibrary('all')),
-    renderHRow('Plan to start', planToStart, goToLibrary('plan')),
+    renderHRow('Continue watching', continueWatching, { onSeeAll: goToLibrary('progress') }),
+    renderHRow('Recently added', recentlyAdded, { onSeeAll: goToLibrary('all') }),
+    renderHRow('Top rated', topRated, { onSeeAll: goToLibrary('all') }),
+    renderHRow('Plan to start', planToStart, { onSeeAll: goToLibrary('plan') }),
   ].filter(Boolean);
 
   rows.forEach((row) => homeSections.appendChild(row));
+
+  if (!settings.tmdbApiKey) {
+    const hint = document.createElement('div');
+    hint.className = 'search-status-msg';
+    hint.style.padding = '4px 18px 14px';
+    hint.style.textAlign = 'left';
+    hint.innerHTML = 'Add a free TMDB API key in <button type="button" class="link-btn" id="homeAddKeyHint">Settings</button> to see trending titles and genre-based picks.';
+    homeSections.appendChild(hint);
+    const link = hint.querySelector('#homeAddKeyHint');
+    if (link) link.addEventListener('click', () => { showPage('profile'); setTimeout(() => openSheet(menuSheet), 200); });
+  } else {
+    renderTmdbDiscoveryRows(token);
+  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1283,8 +1438,9 @@ async function importTmdbHit(hit, mediaType) {
     const detailsRes = await fetchWithTimeout(detailsUrl, detailsOpts, 12000);
     if (detailsRes.ok) {
       const details = await detailsRes.json();
-      const genreNames = (details.genres || []).map((g) => g.name).filter(Boolean);
-      applyGenresToNotes(genreNames);
+      const genres = details.genres || [];
+      applyGenresToNotes(genres.map((g) => g.name).filter(Boolean));
+      state.draftGenreIds = genres.map((g) => g.id).filter((id) => id != null);
     }
   } catch (err) {
     console.error('TMDB genre fetch failed:', err);
@@ -1525,6 +1681,7 @@ function resetForm() {
   state.draftTags = [];
   state.editingId = null;
   state.draftTmdbId = null;
+  state.draftGenreIds = [];
   imdbLinkInput.value = '';
   coverLinkRow.hidden = true;
   coverLinkInput.value = '';
@@ -1565,6 +1722,7 @@ function openEntrySheet(id) {
       }
       state.draftTags = [...(e.tags || [])];
       state.draftTmdbId = e.tmdbId || null;
+      state.draftGenreIds = e.genreIds || [];
       setCoverPreview(e.cover || null, e.title);
       renderTagChips();
       updateUnitLabels();
@@ -1607,6 +1765,7 @@ form.addEventListener('submit', (e) => {
     tags: state.draftTags.slice(),
     cover: state.draftCover,
     tmdbId: state.draftTmdbId,
+    genreIds: state.draftGenreIds.slice(),
     updatedAt: Date.now(),
   };
 
@@ -1842,6 +2001,7 @@ $('#importFile').addEventListener('change', async (e) => {
         tags: Array.isArray(raw.tags) ? raw.tags : [],
         cover: raw.cover || null,
         tmdbId: raw.tmdbId || null,
+        genreIds: Array.isArray(raw.genreIds) ? raw.genreIds : [],
         createdAt: raw.createdAt || Date.now(),
         updatedAt: raw.updatedAt || Date.now(),
       });
