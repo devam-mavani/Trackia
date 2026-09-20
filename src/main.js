@@ -531,23 +531,43 @@ function renderTmdbCard(hit) {
   return card;
 }
 
-/* ---- TMDB trending / genre-based recommendation caching ----
+/* ---- TMDB trending / genre-based discovery, with pagination ----
    Kept in memory only (not persisted) and reused for a few minutes so
-   revisiting the Home tab doesn't refire these requests every time. */
+   revisiting the Home tab doesn't refire these requests every time.
+   Each row starts with one page (~20 titles) and can be expanded with a
+   "More" card up to ROW_PAGE_CAP pages (100 titles) per row. */
 const TMDB_CACHE_TTL = 10 * 60 * 1000;
-let trendingCache = null; // { at, items }
-let genreNameCache = null; // { at, map }
-const recommendedCache = {}; // genreId -> { at, items }
+const ROW_PAGE_CAP = 5; // 5 pages x 20 results = up to 100 titles per row
+const ROW_PAGE_SIZE = 20;
 
-async function getTrendingCached() {
-  if (trendingCache && Date.now() - trendingCache.at < TMDB_CACHE_TTL) return trendingCache.items;
-  const [url, opts] = tmdbRequest('/trending/all/week');
+const tmdbPageCache = new Map(); // cacheKey -> { at, pages: Map(page -> items) }
+let genreNameCache = null; // { at, map }
+
+async function fetchTmdbPage(cacheKey, path, params, page) {
+  let bucket = tmdbPageCache.get(cacheKey);
+  if (bucket && Date.now() - bucket.at > TMDB_CACHE_TTL) bucket = null;
+  if (!bucket) {
+    bucket = { at: Date.now(), pages: new Map() };
+    tmdbPageCache.set(cacheKey, bucket);
+  }
+  if (bucket.pages.has(page)) return bucket.pages.get(page);
+  const [url, opts] = tmdbRequest(path, { ...params, page: String(page) });
   const res = await fetchWithTimeout(url, opts, 12000);
-  if (!res.ok) throw new Error('trending_failed');
+  if (!res.ok) throw new Error(`tmdb_page_failed:${path}`);
   const data = await res.json();
-  const items = (data.results || []).filter((r) => r.media_type === 'movie' || r.media_type === 'tv').slice(0, 15);
-  trendingCache = { at: Date.now(), items };
+  const items = data.results || [];
+  bucket.pages.set(page, items);
   return items;
+}
+
+function fetchTrendingPage(page) {
+  return fetchTmdbPage('trending', '/trending/all/week', {}, page)
+    .then((items) => items.filter((r) => r.media_type === 'movie' || r.media_type === 'tv'));
+}
+
+function fetchGenrePage(genreId, page) {
+  return fetchTmdbPage(`genre:${genreId}`, '/discover/movie', { with_genres: String(genreId), sort_by: 'popularity.desc' }, page)
+    .then((items) => items.map((r) => ({ ...r, media_type: 'movie' })));
 }
 
 async function getGenreNameMap() {
@@ -563,55 +583,142 @@ async function getGenreNameMap() {
   return map;
 }
 
-// Most common genre across the library, weighted slightly by rating so a
-// well-liked title counts a bit more than an unrated one.
-function topGenreId() {
+// Genre ids across the library, most common first, weighted slightly by
+// rating so a well-liked title counts a bit more than an unrated one.
+function topGenreIds(n) {
   const counts = new Map();
   entries.forEach((e) => {
     (e.genreIds || []).forEach((id) => {
       counts.set(id, (counts.get(id) || 0) + 1 + (e.rating ? e.rating / 10 : 0));
     });
   });
-  let best = null;
-  let bestCount = 0;
-  counts.forEach((count, id) => { if (count > bestCount) { bestCount = count; best = id; } });
-  return best;
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([id]) => id);
 }
 
-async function getRecommendedCached(genreId) {
-  const cached = recommendedCache[genreId];
-  if (cached && Date.now() - cached.at < TMDB_CACHE_TTL) return cached.items;
-  const [url, opts] = tmdbRequest('/discover/movie', { with_genres: String(genreId), sort_by: 'popularity.desc' });
-  const res = await fetchWithTimeout(url, opts, 12000);
-  if (!res.ok) throw new Error('discover_failed');
-  const data = await res.json();
-  const items = (data.results || []).slice(0, 15).map((r) => ({ ...r, media_type: 'movie' }));
-  recommendedCache[genreId] = { at: Date.now(), items };
-  return items;
+// A broad spread of popular TMDB genres, used to fill out the Home page
+// with plenty to browse even before your own library has much genre data.
+const DEFAULT_GENRES = [
+  [28, 'Action'], [35, 'Comedy'], [18, 'Drama'], [16, 'Animation'],
+  [27, 'Horror'], [10749, 'Romance'], [878, 'Science Fiction'],
+  [53, 'Thriller'], [14, 'Fantasy'], [80, 'Crime'], [99, 'Documentary'],
+  [10751, 'Family'],
+];
+
+async function buildFeaturedGenres() {
+  const topIds = topGenreIds(3);
+  const nameMap = await getGenreNameMap().catch(() => new Map());
+  const seen = new Set();
+  const featured = [];
+  topIds.forEach((id) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    featured.push({ id, name: nameMap.get(id) || 'Recommended', personal: true });
+  });
+  DEFAULT_GENRES.forEach(([id, name]) => {
+    if (featured.length >= 7) return;
+    if (seen.has(id)) return;
+    seen.add(id);
+    featured.push({ id, name, personal: false });
+  });
+  return featured;
+}
+
+// A trailing "More" card that fetches the row's next page on tap and
+// appends the results, keeping itself at the end of the row until the
+// page cap is hit or TMDB stops returning full pages.
+function makeLoadMoreCard(onActivate) {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'hcard hcard-more';
+  card.innerHTML = `
+    <div class="hcard-cover hcard-more-cover">
+      <svg viewBox="0 0 24 24"><path d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7V4z"/></svg>
+    </div>
+    <div class="hcard-title">More</div>
+  `;
+  let loading = false;
+  card.addEventListener('click', async () => {
+    if (loading) return;
+    loading = true;
+    card.classList.add('loading');
+    try {
+      await onActivate();
+    } finally {
+      loading = false;
+      card.classList.remove('loading');
+    }
+  });
+  return card;
+}
+
+// Builds one horizontally-scrolling, paginated TMDB row. `fetchPage(page)`
+// must resolve to an array of TMDB-shaped hits for that page (1-indexed).
+async function createPaginatedTmdbRow(title, fetchPage) {
+  const first = await fetchPage(1);
+  if (!first.length) return null;
+
+  const section = document.createElement('section');
+  section.className = 'hrow';
+  const head = document.createElement('div');
+  head.className = 'hrow-head';
+  head.innerHTML = `<h2>${escapeHtml(title)}</h2>`;
+  section.appendChild(head);
+
+  const scroll = document.createElement('div');
+  scroll.className = 'hscroll';
+  section.appendChild(scroll);
+  first.forEach((hit) => scroll.appendChild(renderTmdbCard(hit)));
+
+  let page = 1;
+  let moreCard = null;
+
+  const attachMoreCard = () => {
+    if (page >= ROW_PAGE_CAP) return;
+    moreCard = makeLoadMoreCard(async () => {
+      const next = await fetchPage(page + 1);
+      page += 1;
+      moreCard.remove();
+      moreCard = null;
+      next.forEach((hit) => scroll.appendChild(renderTmdbCard(hit)));
+      if (next.length >= ROW_PAGE_SIZE) attachMoreCard();
+    });
+    scroll.appendChild(moreCard);
+  };
+  if (first.length >= ROW_PAGE_SIZE) attachMoreCard();
+
+  return section;
 }
 
 let homeRenderToken = 0;
 
 async function renderTmdbDiscoveryRows(token) {
   try {
-    const trending = await getTrendingCached();
+    const row = await createPaginatedTmdbRow('Trending this week', fetchTrendingPage);
     if (token !== homeRenderToken) return;
-    const row = renderHRow('Trending this week', trending, { cardRenderer: renderTmdbCard });
     if (row) homeSections.appendChild(row);
   } catch (err) {
     console.error('TMDB trending fetch failed:', err);
   }
 
-  const genreId = topGenreId();
-  if (genreId == null) return;
+  let featured;
   try {
-    const [recs, genreMap] = await Promise.all([getRecommendedCached(genreId), getGenreNameMap()]);
-    if (token !== homeRenderToken) return;
-    const genreName = genreMap.get(genreId) || 'this genre';
-    const row = renderHRow(`Because you like ${genreName}`, recs, { cardRenderer: renderTmdbCard });
-    if (row) homeSections.appendChild(row);
+    featured = await buildFeaturedGenres();
   } catch (err) {
-    console.error('TMDB recommendation fetch failed:', err);
+    console.error('TMDB genre list fetch failed:', err);
+    featured = DEFAULT_GENRES.map(([id, name]) => ({ id, name, personal: false }));
+  }
+  if (token !== homeRenderToken) return;
+
+  for (const genre of featured) {
+    if (token !== homeRenderToken) return;
+    try {
+      const label = genre.personal ? `Because you like ${genre.name}` : genre.name;
+      const row = await createPaginatedTmdbRow(label, (page) => fetchGenrePage(genre.id, page));
+      if (token !== homeRenderToken) return;
+      if (row) homeSections.appendChild(row);
+    } catch (err) {
+      console.error(`TMDB genre row failed (${genre.name}):`, err);
+    }
   }
 }
 

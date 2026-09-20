@@ -367,6 +367,35 @@ body[data-tile="large"] {
   margin-top: 2px;
 }
 
+.hcard-more {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+}
+.hcard-more-cover {
+  border-style: dashed;
+  border-color: var(--c-border);
+  transition: transform 0.22s var(--ease-smooth), border-color 0.2s var(--ease-smooth);
+}
+.hcard-more-cover svg {
+  width: 26px;
+  height: 26px;
+  fill: var(--c-text-dim);
+}
+.hcard-more:active .hcard-more-cover {
+  transform: scale(0.95);
+}
+.hcard-more.loading .hcard-more-cover svg {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* ---------- Profile page ---------- */
 .profile-body {
   padding: 4px 18px 30px;
@@ -1162,20 +1191,23 @@ textarea:focus-visible {
 
 .detail-cover {
   position: relative;
-  width: 100%;
-  height: 230px;
+  width: 58%;
+  max-width: 220px;
+  aspect-ratio: 2 / 3;
+  margin: 4px auto 16px;
   border-radius: 16px;
   overflow: hidden;
   background: var(--c-surface-2);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 14px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
 }
 .detail-cover img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: center top;
 }
 .detail-cover .initial {
   font-family: var(--font-display);
@@ -1183,14 +1215,6 @@ textarea:focus-visible {
   font-weight: 700;
   color: #fff;
   opacity: 0.9;
-}
-.detail-cover::after {
-  content: "";
-  position: absolute;
-  inset: auto 0 0 0;
-  height: 55%;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent);
-  pointer-events: none;
 }
 
 .detail-badges {
