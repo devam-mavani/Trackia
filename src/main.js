@@ -1,3 +1,4 @@
+import { App } from '@capacitor/app';
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
@@ -81,6 +82,7 @@ const state = {
   draftMalId: null,
   draftBookId: null,
   draftBookGenres: [],
+  draftGenreNames: [],
 };
 
 /* ---------------------------------------------------------------------- */
@@ -124,6 +126,35 @@ bottomNav.addEventListener('click', (e) => {
   if (!btn) return;
   showPage(btn.dataset.page);
 });
+
+/* ---------------------------------------------------------------------- */
+/*  Android hardware back button — close things instead of exiting        */
+/* ---------------------------------------------------------------------- */
+
+if (window.Capacitor?.isNativePlatform?.()) {
+  App.addListener('backButton', () => {
+    // 1) An open sheet (add/edit, detail, settings) takes priority — close it.
+    const openSheetEl = ALL_SHEETS.find((s) => !s.hidden);
+    if (openSheetEl) {
+      if (openSheetEl === detailSheet) closeDetailCard();
+      else closeSheet(openSheetEl);
+      return;
+    }
+    // 2) An open search-results dropdown on Home.
+    if (!homeSearchResults.hidden) {
+      homeSearchResults.hidden = true;
+      return;
+    }
+    // 3) Not on Home — go back to Home instead of leaving the app.
+    if (currentPage !== 'home') {
+      showPage('home');
+      return;
+    }
+    // 4) Already at the root with nothing open — send the app to the
+    // background (like the Home button) rather than killing it outright.
+    App.minimizeApp();
+  });
+}
 
 /* ---------------------------------------------------------------------- */
 /*  Init settings application                                              */
@@ -279,6 +310,13 @@ function renderCard(e) {
 
   body.appendChild(title);
   body.appendChild(status);
+
+  if (e.genreNames && e.genreNames.length) {
+    const genreBadge = document.createElement('span');
+    genreBadge.className = 'badge badge-genre';
+    genreBadge.textContent = e.genreNames.slice(0, 2).join(' · ');
+    body.appendChild(genreBadge);
+  }
 
   const unit = UNIT_BY_TYPE[e.type] || 'progress';
   if (unit !== 'watch' || e.total) {
@@ -1882,6 +1920,38 @@ function applyGenresToNotes(genreNames) {
   upsertNoteLine('Genres', genreNames.join(', '));
 }
 
+// Adds each genre as its own tag (deduped, case-insensitive) and repaints
+// the tag chip row — shared by every provider's import flow.
+function applyGenresToTags(genreNames) {
+  let changed = false;
+  genreNames.forEach((name) => {
+    if (!name) return;
+    const exists = state.draftTags.some((t) => t.toLowerCase() === name.toLowerCase());
+    if (!exists) { state.draftTags.push(name); changed = true; }
+  });
+  if (changed) renderTagChips();
+}
+
+function truncateText(str, max) {
+  if (!str) return '';
+  const clean = str.replace(/\s+/g, ' ').trim();
+  return clean.length > max ? `${clean.slice(0, max - 1).trim()}…` : clean;
+}
+
+// Strips HTML tags from provider descriptions (Google Books in particular
+// sometimes returns simple HTML) down to plain text for the notes field.
+function stripHtml(html) {
+  if (!html) return '';
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  return (tmp.textContent || tmp.innerText || '').trim();
+}
+
+function applySummaryToNotes(summary) {
+  if (!summary) return;
+  upsertNoteLine('Summary', truncateText(summary, 500));
+}
+
 // Fetches a remote poster/cover URL, tries to embed it locally (cropped +
 // compressed, same as camera/gallery covers), and falls back to just using
 // the remote URL directly if that fails for any reason (CORS, timeout,
@@ -1928,9 +1998,10 @@ async function importTmdbHit(hit, mediaType) {
   }
 
   // Genre names aren't in the /find or /search response (only numeric
-  // genre_ids), so pull them from the movie/tv details endpoint and drop
-  // them into notes. Best-effort: if it fails, the rest of the import
-  // above has already succeeded, so we just skip it quietly.
+  // genre_ids), so pull them from the movie/tv details endpoint — along
+  // with the overview, used as a notes summary. Best-effort: if it fails,
+  // the rest of the import above has already succeeded, so we just skip
+  // it quietly.
   try {
     const detailsPath = mediaType === 'movie' ? `/movie/${hit.id}` : `/tv/${hit.id}`;
     const [detailsUrl, detailsOpts] = tmdbRequest(detailsPath);
@@ -1938,8 +2009,12 @@ async function importTmdbHit(hit, mediaType) {
     if (detailsRes.ok) {
       const details = await detailsRes.json();
       const genres = details.genres || [];
-      applyGenresToNotes(genres.map((g) => g.name).filter(Boolean));
+      const genreNames = genres.map((g) => g.name).filter(Boolean);
       state.draftGenreIds = genres.map((g) => g.id).filter((id) => id != null);
+      state.draftGenreNames = genreNames;
+      applyGenresToTags(genreNames);
+      applyGenresToNotes(genreNames);
+      applySummaryToNotes(details.overview || hit.overview || '');
     }
   } catch (err) {
     console.error('TMDB genre fetch failed:', err);
@@ -2044,6 +2119,7 @@ function normalizeJikanHit(m) {
     genres: (m.genres || []).map((g) => g.name),
     genreIds: (m.genres || []).map((g) => g.mal_id),
     rating: m.score || null,
+    synopsis: m.synopsis || '',
   };
 }
 
@@ -2059,7 +2135,10 @@ async function importMangaHit(hit) {
   syncThemedSelect(f_type);
   state.draftMalId = hit.id != null ? String(hit.id) : null;
   state.draftGenreIds = hit.genreIds || [];
+  state.draftGenreNames = hit.genres || [];
+  applyGenresToTags(hit.genres || []);
   applyGenresToNotes(hit.genres || []);
+  applySummaryToNotes(hit.synopsis || '');
   await embedRemoteCoverOrFallback(hit.cover, hit.title);
 }
 
@@ -2093,6 +2172,7 @@ function normalizeGoogleBookHit(item) {
     cover: thumb ? thumb.replace('http://', 'https://') : null,
     genres: info.categories || [],
     rating: info.averageRating || null,
+    description: info.description || '',
   };
 }
 
@@ -2147,6 +2227,21 @@ async function searchBooks(query) {
   return (data.docs || []).map(normalizeOpenLibraryDoc);
 }
 
+// Open Library's search/subject endpoints don't include a description —
+// only the individual work resource does — so this is fetched lazily,
+// only when a hit from that source is actually imported.
+async function fetchOpenLibraryDescription(workKey) {
+  try {
+    const res = await fetchWithTimeout(`https://openlibrary.org${workKey}.json`, undefined, 12000);
+    if (!res.ok) return '';
+    const data = await res.json();
+    if (!data.description) return '';
+    return typeof data.description === 'string' ? data.description : (data.description.value || '');
+  } catch {
+    return '';
+  }
+}
+
 async function importBookHit(hit) {
   if (hit.title) f_title.value = hit.title;
   f_type.value = 'book';
@@ -2154,8 +2249,17 @@ async function importBookHit(hit) {
   syncThemedSelect(f_type);
   state.draftBookId = hit.id != null ? String(hit.id) : null;
   state.draftBookGenres = hit.genres || [];
-  applyGenresToNotes(hit.genres || []);
+  state.draftGenreNames = hit.genres || [];
   upsertNoteLine('Author', hit.subtitle);
+  applyGenresToTags(hit.genres || []);
+  applyGenresToNotes(hit.genres || []);
+
+  let summary = hit.description || '';
+  if (!summary && hit.source === 'openlibrary' && typeof hit.id === 'string' && hit.id.startsWith('/works/')) {
+    summary = await fetchOpenLibraryDescription(hit.id);
+  }
+  applySummaryToNotes(stripHtml(summary));
+
   await embedRemoteCoverOrFallback(hit.cover, hit.title);
 }
 
@@ -2333,6 +2437,7 @@ function resetForm() {
   state.draftMalId = null;
   state.draftBookId = null;
   state.draftBookGenres = [];
+  state.draftGenreNames = [];
   imdbLinkInput.value = '';
   coverLinkRow.hidden = true;
   coverLinkInput.value = '';
@@ -2377,6 +2482,7 @@ function openEntrySheet(id) {
       state.draftMalId = e.malId || null;
       state.draftBookId = e.bookId || null;
       state.draftBookGenres = e.bookGenres || [];
+      state.draftGenreNames = e.genreNames || [];
       setCoverPreview(e.cover || null, e.title);
       renderTagChips();
       updateUnitLabels();
@@ -2423,6 +2529,7 @@ form.addEventListener('submit', (e) => {
     malId: state.draftMalId,
     bookId: state.draftBookId,
     bookGenres: state.draftBookGenres.slice(),
+    genreNames: state.draftGenreNames.slice(),
     updatedAt: Date.now(),
   };
 
@@ -2670,6 +2777,7 @@ $('#importFile').addEventListener('change', async (e) => {
         malId: raw.malId || null,
         bookId: raw.bookId || null,
         bookGenres: Array.isArray(raw.bookGenres) ? raw.bookGenres : [],
+        genreNames: Array.isArray(raw.genreNames) ? raw.genreNames : [],
         createdAt: raw.createdAt || Date.now(),
         updatedAt: raw.updatedAt || Date.now(),
       });

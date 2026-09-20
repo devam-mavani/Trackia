@@ -14,7 +14,7 @@
     Roboto, Helvetica, Arial, sans-serif;
 
   --fs-base: 15px;
-  --tile-min: 155px;
+  --tile-min: 132px;
 
   /* Apple-style easing: gentle deceleration for sheets/fades, a light
      overshoot ("spring") for anything that should feel tactile/poppy. */
@@ -59,13 +59,13 @@ body[data-font="large"] {
 }
 
 body[data-tile="small"] {
-  --tile-min: 128px;
+  --tile-min: 108px;
 }
 body[data-tile="medium"] {
-  --tile-min: 155px;
+  --tile-min: 132px;
 }
 body[data-tile="large"] {
-  --tile-min: 190px;
+  --tile-min: 162px;
 }
 
 #app {
@@ -938,6 +938,12 @@ textarea:focus-visible {
 .badge-rating {
   background: var(--c-accent);
   color: #fff;
+}
+.badge-genre {
+  align-self: flex-start;
+  background: var(--c-surface-2);
+  color: var(--c-text-dim);
+  border: 1px solid var(--c-border);
 }
 
 .card-body {
