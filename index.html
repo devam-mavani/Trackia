@@ -590,12 +590,35 @@
               community-run service — grab your own key at
               themoviedb.org/settings/api and paste it below. Nothing is sent
               anywhere except TMDB's servers, and only when you tap Fetch.
+              This key also powers the Home page's search and recommendation
+              rows for movies and series.
             </p>
             <label class="field">
               <span>TMDB API key</span>
               <input
                 type="text"
                 id="tmdbApiKeyInput"
+                placeholder="Paste your key here"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+          </div>
+
+          <div class="settings-group">
+            <h3>Book search</h3>
+            <p class="settings-hint">
+              Powers book search and recommendations on the Home page. Works
+              out of the box using Open Library (free, no key). Add a free
+              Google Books key at
+              console.cloud.google.com/apis/library/books.googleapis.com for
+              richer results — ratings, descriptions, and better cover art.
+            </p>
+            <label class="field">
+              <span>Google Books API key (optional)</span>
+              <input
+                type="text"
+                id="googleBooksApiKeyInput"
                 placeholder="Paste your key here"
                 autocomplete="off"
                 spellcheck="false"
