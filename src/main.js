@@ -264,13 +264,37 @@ const PAGES = {
   profile: $('#page-profile'),
 };
 const bottomNav = $('#bottomNav');
+const navIndicator = $('#navIndicator');
 let currentPage = 'home';
+
+// Slides the little glass pill behind whichever tab is active. `immediate`
+// skips the transition — used on first paint and on resize, where snapping
+// into place (rather than gliding from a stale position) is what should
+// happen.
+function moveNavIndicator(immediate) {
+  const activeBtn = bottomNav.querySelector('.nav-btn.active');
+  if (!activeBtn || !navIndicator) return;
+  const navRect = bottomNav.getBoundingClientRect();
+  const btnRect = activeBtn.getBoundingClientRect();
+  const x = btnRect.left - navRect.left;
+
+  if (immediate) navIndicator.style.transitionProperty = 'none';
+  navIndicator.style.width = `${btnRect.width}px`;
+  navIndicator.style.transform = `translateX(${x}px)`;
+  if (immediate) {
+    // Force layout so the transition-less move above actually commits
+    // before handing the transition back for the next (animated) move.
+    void navIndicator.offsetWidth;
+    navIndicator.style.transitionProperty = '';
+  }
+}
 
 function showPage(name) {
   if (!PAGES[name]) return;
   currentPage = name;
   Object.entries(PAGES).forEach(([key, el]) => { el.hidden = key !== name; });
   bottomNav.querySelectorAll('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.page === name));
+  moveNavIndicator();
   window.scrollTo({ top: 0 });
   if (name === 'home') renderHome();
   if (name === 'profile') renderProfile();
@@ -281,6 +305,8 @@ bottomNav.addEventListener('click', (e) => {
   if (!btn) return;
   showPage(btn.dataset.page);
 });
+
+window.addEventListener('resize', () => moveNavIndicator(true));
 
 /* ---------------------------------------------------------------------- */
 /*  Init settings application                                              */
