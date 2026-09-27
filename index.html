@@ -73,7 +73,7 @@
             <input
               type="search"
               id="homeSearchInput"
-              placeholder="Search a movie or show…"
+              placeholder="Search movies, shows, actors, directors…"
               autocomplete="off"
             />
           </div>
@@ -519,6 +519,43 @@
               Edit
             </button>
           </div>
+
+          <div class="detail-recs" id="detailRecsWrap" hidden>
+            <h3>More like this</h3>
+            <div class="tmdb-grid" id="detailRecsGrid"></div>
+            <div class="search-status-msg" id="detailRecsStatus" hidden></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Person filmography sheet — opened from a "person" search result -->
+      <section class="sheet person-sheet" id="personSheet" hidden>
+        <div class="sheet-handle" id="personHandle"><span></span></div>
+        <div class="sheet-head">
+          <h2 id="personName">Person</h2>
+          <button class="icon-btn" id="personClose" aria-label="Close">
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M6.4 5L5 6.4l5.6 5.6L5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6 6.4 5z"
+              />
+            </svg>
+          </button>
+        </div>
+
+        <div class="sheet-body" id="personBody">
+          <div class="person-header">
+            <div class="person-photo" id="personPhoto">
+              <span class="initial" id="personPhotoInitial"></span>
+              <img id="personPhotoImg" alt="" hidden />
+            </div>
+            <div class="person-meta">
+              <div class="person-dept" id="personDept"></div>
+              <p class="person-bio" id="personBio" hidden></p>
+            </div>
+          </div>
+
+          <div id="personCredits"></div>
+          <div class="search-status-msg" id="personStatus" hidden></div>
         </div>
       </section>
 

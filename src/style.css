@@ -340,6 +340,25 @@ body[data-tile="large"] {
   color: var(--c-accent);
   flex: none;
 }
+.search-hit-cover.person-cover {
+  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+}
+.search-hit-meta.person-meta-line {
+  color: var(--c-accent);
+  font-weight: 600;
+}
+.search-hit-tag.person-tag {
+  display: flex;
+  align-items: center;
+}
+.search-hit-tag.person-tag svg {
+  width: 16px;
+  height: 16px;
+  fill: var(--c-text-dim);
+}
+
 .search-status-msg {
   padding: 16px 10px;
   text-align: center;
@@ -1451,6 +1470,93 @@ textarea:focus-visible {
 
 .detail-actions {
   margin-top: 4px;
+}
+
+/* ---------- "More like this" recs (detail sheet) + person filmography grid ---------- */
+.detail-recs {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--glass-edge);
+}
+.detail-recs h3 {
+  font-family: var(--font-display);
+  font-size: 0.92rem;
+  color: var(--c-text-dim);
+  margin: 0 0 10px;
+}
+
+.tmdb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 14px 10px;
+}
+.tmdb-grid .hcard {
+  width: 100%;
+}
+.tmdb-grid .hcard-cover {
+  width: 100%;
+}
+
+/* ---------- Person filmography sheet ---------- */
+.person-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.person-photo {
+  flex: none;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--c-surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--glass-edge);
+}
+.person-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.person-photo .initial {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #fff;
+  opacity: 0.9;
+}
+.person-meta {
+  flex: 1;
+  min-width: 0;
+}
+.person-dept {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--c-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.person-bio {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--c-text-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.person-credits-group {
+  margin-bottom: 22px;
+}
+.person-credits-group h3 {
+  font-family: var(--font-display);
+  font-size: 0.92rem;
+  color: var(--c-text-dim);
+  margin: 0 0 10px;
 }
 
 /* ---------- Form fields ---------- */

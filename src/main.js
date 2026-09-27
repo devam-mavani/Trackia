@@ -252,7 +252,12 @@ const backdrop = $('#backdrop');
 const entrySheet = $('#entrySheet');
 const menuSheet = $('#menuSheet');
 const detailSheet = $('#detailSheet');
-const ALL_SHEETS = [entrySheet, menuSheet, detailSheet];
+const detailRecsWrap = $('#detailRecsWrap');
+const detailRecsGrid = $('#detailRecsGrid');
+const detailRecsStatus = $('#detailRecsStatus');
+const detailScrollEl = detailSheet.querySelector('.sheet-body');
+const personSheet = $('#personSheet');
+const ALL_SHEETS = [entrySheet, menuSheet, detailSheet, personSheet];
 
 /* ---------------------------------------------------------------------- */
 /*  Pages (Home / Library / Profile) + bottom nav                         */
@@ -986,13 +991,74 @@ function tmdbYear(hit) {
   return d ? d.slice(0, 4) : '';
 }
 
+// TMDB's known_for_department is a job family, not a friendly noun — map
+// the common ones to something a person would actually read as a role.
+const PERSON_DEPT_LABEL = {
+  Directing: 'Director',
+  Acting: 'Actor',
+  Writing: 'Writer',
+  Production: 'Producer',
+  Sound: 'Composer',
+  Camera: 'Cinematographer',
+  Editing: 'Editor',
+};
+
+function renderPersonHit(hit) {
+  const name = hit.name || 'Untitled';
+  const row = document.createElement('div');
+  row.className = 'search-hit';
+
+  const cover = document.createElement('div');
+  cover.className = 'search-hit-cover person-cover';
+  if (hit.profile_path) {
+    const img = document.createElement('img');
+    img.src = `https://image.tmdb.org/t/p/w200${hit.profile_path}`;
+    img.alt = '';
+    cover.appendChild(img);
+  } else {
+    cover.style.background = colorForString(name);
+    const span = document.createElement('span');
+    span.className = 'initial';
+    span.textContent = initials(name);
+    cover.appendChild(span);
+  }
+
+  const info = document.createElement('div');
+  info.className = 'search-hit-info';
+  const deptLabel = PERSON_DEPT_LABEL[hit.known_for_department] || hit.known_for_department || 'Person';
+  info.innerHTML = `
+    <div class="search-hit-title">${escapeHtml(name)}</div>
+    <div class="search-hit-meta person-meta-line">${escapeHtml(deptLabel)}</div>
+  `;
+
+  const tag = document.createElement('span');
+  tag.className = 'search-hit-tag person-tag';
+  tag.innerHTML = '<svg viewBox="0 0 24 24"><path d="M8.6 5.4L15.2 12l-6.6 6.6-1.4-1.4L12.4 12 7.2 6.8z"/></svg>';
+
+  row.appendChild(cover);
+  row.appendChild(info);
+  row.appendChild(tag);
+
+  row.addEventListener('click', () => {
+    homeSearchResults.hidden = true;
+    homeSearchInput.blur();
+    openPersonSheet(hit);
+  });
+
+  return row;
+}
+
 function renderSearchHits(hits) {
   homeSearchResults.innerHTML = '';
   if (!hits.length) {
-    showSearchStatus("No matches on TMDB — try a different title.");
+    showSearchStatus('No matches on TMDB — try a different title or name.');
     return;
   }
   hits.forEach((hit) => {
+    if (hit.media_type === 'person') {
+      homeSearchResults.appendChild(renderPersonHit(hit));
+      return;
+    }
     const mediaType = hit.media_type === 'movie' ? 'movie' : 'tv';
     const title = hit.title || hit.name || 'Untitled';
     const row = document.createElement('div');
@@ -1063,12 +1129,152 @@ async function runHomeSearch(query) {
     if (res.status === 401) { showSearchStatus('TMDB rejected that API key — double check it in Settings.'); return; }
     if (!res.ok) { showSearchStatus('TMDB error — try again shortly.'); return; }
     const data = await res.json();
-    const hits = (data.results || []).filter((r) => r.media_type === 'movie' || r.media_type === 'tv').slice(0, 10);
+    // Movies/shows first, then people — and a person needs at least one
+    // profile photo or known-for credit to be worth surfacing.
+    const results = data.results || [];
+    const titles = results.filter((r) => r.media_type === 'movie' || r.media_type === 'tv');
+    const people = results.filter((r) => r.media_type === 'person');
+    const hits = [...titles, ...people].slice(0, 15);
     if (token !== homeSearchToken) return;
     renderSearchHits(hits);
   } catch (err) {
     if (token !== homeSearchToken) return;
     showSearchStatus(err.name === 'AbortError' ? 'TMDB took too long to respond.' : "Couldn't reach TMDB — check your connection.");
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Person filmography sheet — search result for an actor/director/etc.   */
+/* ---------------------------------------------------------------------- */
+
+const personNameEl = $('#personName');
+const personPhoto = $('#personPhoto');
+const personPhotoImg = $('#personPhotoImg');
+const personPhotoInitial = $('#personPhotoInitial');
+const personDeptEl = $('#personDept');
+const personBioEl = $('#personBio');
+const personCreditsEl = $('#personCredits');
+const personStatusEl = $('#personStatus');
+let personRequestToken = 0;
+
+function showPersonStatus(html) {
+  personStatusEl.innerHTML = html;
+  personStatusEl.hidden = false;
+}
+
+// Builds one "Directing" / "Acting" section of a person's filmography as a
+// grid of TMDB cards, reusing the same card + add-to-library flow as the
+// Home page's trending/genre rows.
+function renderCreditsGroup(label, hits) {
+  if (!hits.length) return null;
+  const group = document.createElement('div');
+  group.className = 'person-credits-group';
+  group.innerHTML = `<h3>${escapeHtml(label)}</h3>`;
+  const grid = document.createElement('div');
+  grid.className = 'tmdb-grid';
+  hits.forEach((hit) => grid.appendChild(renderTmdbCard(hit)));
+  group.appendChild(grid);
+  return group;
+}
+
+async function openPersonSheet(hit) {
+  const token = ++personRequestToken;
+  const name = hit.name || 'Untitled';
+
+  personNameEl.textContent = name;
+  personDeptEl.textContent = PERSON_DEPT_LABEL[hit.known_for_department] || hit.known_for_department || '';
+  personBioEl.hidden = true;
+  personBioEl.textContent = '';
+  personCreditsEl.innerHTML = '';
+  personStatusEl.hidden = true;
+
+  if (hit.profile_path) {
+    personPhotoImg.src = `https://image.tmdb.org/t/p/w200${hit.profile_path}`;
+    personPhotoImg.hidden = false;
+    personPhotoInitial.hidden = true;
+    personPhoto.style.background = 'transparent';
+  } else {
+    personPhotoImg.hidden = true;
+    personPhotoInitial.hidden = false;
+    personPhotoInitial.textContent = initials(name);
+    personPhoto.style.background = colorForString(name);
+  }
+
+  openSheet(personSheet);
+  showPersonStatus('Loading filmography…');
+
+  const apiKey = settings.tmdbApiKey;
+  if (!apiKey) {
+    showPersonStatus('Add a free TMDB API key in <button type="button" class="link-btn" id="personOpenSettingsLink">Settings</button> to load a filmography.');
+    const link = $('#personOpenSettingsLink');
+    if (link) link.addEventListener('click', () => { closeSheet(personSheet); showPage('profile'); setTimeout(() => openSheet(menuSheet), 200); });
+    return;
+  }
+
+  try {
+    const [detailsUrl, detailsOpts] = tmdbRequest(`/person/${hit.id}`);
+    const [creditsUrl, creditsOpts] = tmdbRequest(`/person/${hit.id}/combined_credits`);
+    const [detailsRes, creditsRes] = await Promise.all([
+      fetchWithTimeout(detailsUrl, detailsOpts, 12000),
+      fetchWithTimeout(creditsUrl, creditsOpts, 12000),
+    ]);
+    if (token !== personRequestToken) return;
+
+    if (detailsRes.status === 401 || creditsRes.status === 401) {
+      showPersonStatus('TMDB rejected that API key — double check it in Settings.');
+      return;
+    }
+    if (detailsRes.ok) {
+      const details = await detailsRes.json();
+      if (details.biography) {
+        personBioEl.textContent = details.biography;
+        personBioEl.hidden = false;
+      }
+    }
+    if (!creditsRes.ok) { showPersonStatus('TMDB error — try again shortly.'); return; }
+
+    const credits = await creditsRes.json();
+    if (token !== personRequestToken) return;
+
+    const withPoster = (list) => list.filter((c) => (c.media_type === 'movie' || c.media_type === 'tv') && c.poster_path);
+    const byPopularity = (a, b) => (b.popularity || 0) - (a.popularity || 0);
+
+    // Directing credits (falls back to any crew job if they've never
+    // directed, e.g. a writer or cinematographer), then acting credits —
+    // each de-duplicated by title id and capped so the sheet stays snappy.
+    const crew = credits.crew || [];
+    const directing = withPoster(crew.filter((c) => c.job === 'Director'));
+    const otherCrewJob = directing.length ? null : (crew[0]?.department || null);
+    const otherCrew = directing.length || !otherCrewJob ? [] : withPoster(crew.filter((c) => c.department === otherCrewJob));
+
+    const dedupe = (list) => {
+      const seen = new Set();
+      return list.filter((c) => {
+        const key = `${c.media_type}:${c.id}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    };
+
+    const directingHits = dedupe(directing).sort(byPopularity).slice(0, 40);
+    const otherCrewHits = dedupe(otherCrew).sort(byPopularity).slice(0, 40);
+    const actingHits = dedupe(withPoster(credits.cast || [])).sort(byPopularity).slice(0, 40);
+
+    const groups = [
+      renderCreditsGroup('Directing', directingHits),
+      renderCreditsGroup(otherCrewJob || 'Crew', otherCrewHits),
+      renderCreditsGroup('Acting', actingHits),
+    ].filter(Boolean);
+
+    if (!groups.length) {
+      showPersonStatus('No titles with posters found for this person.');
+      return;
+    }
+    groups.forEach((g) => personCreditsEl.appendChild(g));
+  } catch (err) {
+    if (token !== personRequestToken) return;
+    showPersonStatus(err.name === 'AbortError' ? 'TMDB took too long to respond.' : "Couldn't reach TMDB — check your connection.");
   }
 }
 
@@ -1230,8 +1436,97 @@ function openDetailSheet(id) {
     detailNotesWrap.hidden = true;
   }
 
+  loadDetailRecs(e);
   openDetailCard();
 }
+
+/* ---- "More like this" — TMDB recommendations, loaded as the detail
+   sheet is scrolled, so browsing recs feels like scrolling one long page
+   rather than opening something separate. Adding a rec (via the same
+   entry form as everywhere else) makes it a normal library entry, and the
+   next time this sheet renders it'll show up with an "In list" badge like
+   any other TMDB card. ---- */
+let detailRecsToken = 0;
+let detailRecsPage = 0;
+let detailRecsLoading = false;
+let detailRecsExhausted = false;
+let detailRecsMediaType = null;
+let detailRecsTmdbId = null;
+const DETAIL_RECS_PAGE_CAP = 5;
+
+function resetDetailRecs() {
+  detailRecsWrap.hidden = true;
+  detailRecsGrid.innerHTML = '';
+  detailRecsStatus.hidden = true;
+  detailRecsPage = 0;
+  detailRecsExhausted = false;
+  detailRecsLoading = false;
+  detailRecsMediaType = null;
+  detailRecsTmdbId = null;
+}
+
+function loadDetailRecs(e) {
+  resetDetailRecs();
+  const mediaType = e.type === 'movie' ? 'movie' : e.type === 'series' ? 'tv' : null;
+  if (!mediaType || !e.tmdbId || !settings.tmdbApiKey) return;
+
+  detailRecsMediaType = mediaType;
+  detailRecsTmdbId = e.tmdbId;
+  detailRecsWrap.hidden = false;
+  const token = ++detailRecsToken;
+  fetchNextDetailRecsPage(token);
+}
+
+async function fetchNextDetailRecsPage(token) {
+  if (detailRecsLoading || detailRecsExhausted || token !== detailRecsToken) return;
+  if (!detailRecsMediaType || !detailRecsTmdbId) return;
+
+  detailRecsLoading = true;
+  const page = detailRecsPage + 1;
+  if (page === 1) { detailRecsStatus.hidden = false; detailRecsStatus.textContent = 'Loading…'; }
+
+  try {
+    const [url, opts] = tmdbRequest(`/${detailRecsMediaType}/${detailRecsTmdbId}/recommendations`, { page: String(page) });
+    const res = await fetchWithTimeout(url, opts, 12000);
+    if (token !== detailRecsToken) return;
+    if (!res.ok) {
+      detailRecsExhausted = true;
+      if (page === 1) detailRecsWrap.hidden = true;
+      return;
+    }
+    const data = await res.json();
+    if (token !== detailRecsToken) return;
+
+    const hits = (data.results || []).filter((r) => r.poster_path);
+    detailRecsPage = page;
+    if (page === 1 && !hits.length) { detailRecsWrap.hidden = true; return; }
+
+    hits.forEach((hit) => detailRecsGrid.appendChild(renderTmdbCard({ ...hit, media_type: detailRecsMediaType })));
+    if (!data.results?.length || page >= DETAIL_RECS_PAGE_CAP || (data.total_pages && page >= data.total_pages)) {
+      detailRecsExhausted = true;
+    }
+  } catch (err) {
+    if (token !== detailRecsToken) return;
+    detailRecsExhausted = true;
+    if (page === 1) detailRecsWrap.hidden = true;
+  } finally {
+    if (token === detailRecsToken) {
+      detailRecsLoading = false;
+      detailRecsStatus.hidden = true;
+    }
+  }
+}
+
+// Fires while scrolling the open detail sheet; fetches the next page of
+// recs once the person nears the bottom, so the row grows as they scroll
+// down instead of needing a separate "load more" tap.
+detailScrollEl.addEventListener('scroll', () => {
+  if (detailSheet.hidden || detailRecsWrap.hidden) return;
+  const { scrollTop, scrollHeight, clientHeight } = detailScrollEl;
+  if (scrollTop + clientHeight >= scrollHeight - 300) {
+    fetchNextDetailRecsPage(detailRecsToken);
+  }
+});
 
 function openDetailCard() {
   document.body.style.overflow = 'hidden';
@@ -1250,6 +1545,7 @@ function closeDetailCard() {
   detailSheet.classList.remove('open');
   backdrop.classList.remove('visible');
   document.body.style.overflow = '';
+  detailRecsToken++; // cancel any in-flight/pending recs fetch for this sheet
   setTimeout(() => {
     detailSheet.hidden = true;
     if (ALL_SHEETS.every((s) => s.hidden)) backdrop.hidden = true;
@@ -1350,10 +1646,13 @@ backdrop.addEventListener('click', () => {
   if (!entrySheet.hidden) closeSheet(entrySheet);
   if (!menuSheet.hidden) closeSheet(menuSheet);
   if (!detailSheet.hidden) closeDetailCard();
+  if (!personSheet.hidden) closeSheet(personSheet);
 });
 
 wireSwipeToClose($('#sheetHandle'), entrySheet, () => closeSheet(entrySheet));
 wireSwipeToClose($('#menuHandle'), menuSheet, () => closeSheet(menuSheet));
+wireSwipeToClose($('#personHandle'), personSheet, () => closeSheet(personSheet));
+$('#personClose').addEventListener('click', () => closeSheet(personSheet));
 
 /* ---------------------------------------------------------------------- */
 /*  Entry form                                                             */
