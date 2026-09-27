@@ -236,6 +236,8 @@ const state = {
   draftCover: null,
   draftTmdbId: null,
   draftGenreIds: [],
+  draftDescription: '', // last auto-imported TMDB overview, so a re-import can
+                         // cleanly replace it instead of piling up duplicates
 };
 
 /* ---------------------------------------------------------------------- */
@@ -1650,29 +1652,42 @@ function tmdbRequest(path, params = {}) {
   return [url, opts];
 }
 
-// Merge freshly-fetched genre names into the notes textarea as a single
-// "Genres: ..." line, replacing any previous genre line from an earlier
-// import but leaving the rest of whatever notes are already there intact.
-function applyGenresToNotes(genreNames) {
+// Adds freshly-fetched genre names as tag chips (skipping any that are
+// already present, so re-importing the same title doesn't duplicate them).
+function addGenresToTags(genreNames) {
   if (!genreNames.length) return;
-  const genreLine = `Genres: ${genreNames.join(', ')}`;
-  const existingLines = f_notes.value.split('\n');
-  const genreLineIndex = existingLines.findIndex((l) => l.trim().startsWith('Genres:'));
+  genreNames.forEach((name) => {
+    if (name && !state.draftTags.includes(name)) {
+      state.draftTags.push(name);
+    }
+  });
+  renderTagChips();
+}
 
-  if (genreLineIndex !== -1) {
-    existingLines[genreLineIndex] = genreLine;
-    f_notes.value = existingLines.join('\n');
-  } else if (f_notes.value.trim()) {
-    f_notes.value = `${genreLine}\n${f_notes.value}`;
-  } else {
-    f_notes.value = genreLine;
+// Merges the TMDB overview (description) into the notes textarea. If the
+// previous import already put a description at the top of notes, that block
+// is swapped out for the new one; otherwise the description is prepended
+// ahead of whatever the person has already typed, so their own notes are
+// never lost.
+function applyDescriptionToNotes(description) {
+  const trimmed = (description || '').trim();
+  if (!trimmed) return;
+
+  const prev = state.draftDescription;
+  let rest = f_notes.value;
+  if (prev && rest.startsWith(prev)) {
+    rest = rest.slice(prev.length).replace(/^\n+/, '');
   }
+
+  f_notes.value = rest ? `${trimmed}\n\n${rest}` : trimmed;
+  state.draftDescription = trimmed;
 }
 
 // Applies a TMDB search/find result to the (already open) entry form: title,
-// type, cover art (embedded locally when possible), and a best-effort
-// "Genres: ..." notes line. Shared by the IMDb-link import below and the
-// Home page's title search. `mediaType` is 'movie' or 'tv'.
+// type, cover art (embedded locally when possible), the overview dropped
+// into notes as a description, and the genres added as tag chips. Shared by
+// the IMDb-link import below and the Home page's title search. `mediaType`
+// is 'movie' or 'tv'.
 async function importTmdbHit(hit, mediaType) {
   const title = hit.title || hit.name || '';
   if (title) f_title.value = title;
@@ -1681,6 +1696,10 @@ async function importTmdbHit(hit, mediaType) {
   updateUnitLabels();
   syncThemedSelect(f_type);
   state.draftTmdbId = hit.id != null ? String(hit.id) : null;
+
+  // Search/find results already carry the overview, so the description can
+  // go into notes immediately without waiting on the details fetch below.
+  if (hit.overview) applyDescriptionToNotes(hit.overview);
 
   if (hit.poster_path) {
     const posterUrl = `https://image.tmdb.org/t/p/w500${hit.poster_path}`;
@@ -1698,9 +1717,11 @@ async function importTmdbHit(hit, mediaType) {
   }
 
   // Genre names aren't in the /find or /search response (only numeric
-  // genre_ids), so pull them from the movie/tv details endpoint and drop
-  // them into notes. Best-effort: if it fails, the rest of the import
-  // above has already succeeded, so we just skip it quietly.
+  // genre_ids), so pull them from the movie/tv details endpoint and add
+  // them as tag chips. The details endpoint also returns overview, used
+  // here as a fallback in case the search hit above didn't include one.
+  // Best-effort: if it fails, the rest of the import above has already
+  // succeeded, so we just skip it quietly.
   try {
     const detailsPath = mediaType === 'movie' ? `/movie/${hit.id}` : `/tv/${hit.id}`;
     const [detailsUrl, detailsOpts] = tmdbRequest(detailsPath);
@@ -1708,11 +1729,12 @@ async function importTmdbHit(hit, mediaType) {
     if (detailsRes.ok) {
       const details = await detailsRes.json();
       const genres = details.genres || [];
-      applyGenresToNotes(genres.map((g) => g.name).filter(Boolean));
+      addGenresToTags(genres.map((g) => g.name).filter(Boolean));
       state.draftGenreIds = genres.map((g) => g.id).filter((id) => id != null);
+      if (!hit.overview && details.overview) applyDescriptionToNotes(details.overview);
     }
   } catch (err) {
-    console.error('TMDB genre fetch failed:', err);
+    console.error('TMDB details fetch failed:', err);
   }
 }
 
@@ -1951,6 +1973,7 @@ function resetForm() {
   state.editingId = null;
   state.draftTmdbId = null;
   state.draftGenreIds = [];
+  state.draftDescription = '';
   imdbLinkInput.value = '';
   coverLinkRow.hidden = true;
   coverLinkInput.value = '';
@@ -1992,6 +2015,10 @@ function openEntrySheet(id) {
       state.draftTags = [...(e.tags || [])];
       state.draftTmdbId = e.tmdbId || null;
       state.draftGenreIds = e.genreIds || [];
+      // Not tracked from a re-opened entry: a re-import here will simply
+      // prepend the fresh description ahead of the existing notes rather
+      // than trying to swap out a block we didn't insert this session.
+      state.draftDescription = '';
       setCoverPreview(e.cover || null, e.title);
       renderTagChips();
       updateUnitLabels();
