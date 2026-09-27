@@ -14,7 +14,7 @@
     Roboto, Helvetica, Arial, sans-serif;
 
   --fs-base: 15px;
-  --tile-min: 132px;
+  --tile-min: 155px;
 
   /* Apple-style easing: gentle deceleration for sheets/fades, a light
      overshoot ("spring") for anything that should feel tactile/poppy. */
@@ -59,13 +59,13 @@ body[data-font="large"] {
 }
 
 body[data-tile="small"] {
-  --tile-min: 108px;
+  --tile-min: 128px;
 }
 body[data-tile="medium"] {
-  --tile-min: 132px;
+  --tile-min: 155px;
 }
 body[data-tile="large"] {
-  --tile-min: 162px;
+  --tile-min: 190px;
 }
 
 #app {
@@ -939,12 +939,6 @@ textarea:focus-visible {
   background: var(--c-accent);
   color: #fff;
 }
-.badge-genre {
-  align-self: flex-start;
-  background: var(--c-surface-2);
-  color: var(--c-text-dim);
-  border: 1px solid var(--c-border);
-}
 
 .card-body {
   padding: 10px 11px 12px;
@@ -1635,6 +1629,59 @@ textarea:focus-visible {
   font-size: 0.7rem;
   color: var(--c-text-dim);
   margin-top: 20px;
+}
+
+/* ---------- Auth gate ---------- */
+.auth-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--c-bg);
+}
+.auth-card {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.auth-logo {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  object-fit: cover;
+  margin-bottom: 14px;
+}
+.auth-title {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  margin: 0 0 6px;
+}
+.auth-sub {
+  color: var(--c-text-dim);
+  font-size: 0.9rem;
+  margin: 0 0 24px;
+}
+.auth-form {
+  width: 100%;
+  text-align: left;
+}
+.auth-form .btn-primary {
+  width: 100%;
+  margin-top: 4px;
+}
+.auth-error {
+  color: var(--c-accent);
+  font-size: 0.85rem;
+  margin: -4px 0 14px;
+}
+#authToggleModeBtn {
+  margin-top: 18px;
 }
 
 /* ---------- Toast ---------- */

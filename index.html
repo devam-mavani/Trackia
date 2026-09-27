@@ -11,6 +11,41 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
+    <!-- ====================================================================
+         Auth gate — shown until a signed-in Supabase session is confirmed.
+         Covers the whole screen above everything else in the app.
+         ==================================================================== -->
+    <div class="auth-gate" id="authGate">
+      <div class="auth-card">
+        <img src="/src/assets/logo.jpg" alt="" class="auth-logo" id="authLogo" />
+        <h1 class="auth-title">Trackia</h1>
+        <p class="auth-sub" id="authSub">Sign in to sync your library</p>
+
+        <form class="auth-form" id="authForm">
+          <label class="field">
+            <span>Email</span>
+            <input type="email" id="authEmail" autocomplete="email" required />
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <input
+              type="password"
+              id="authPassword"
+              autocomplete="current-password"
+              minlength="6"
+              required
+            />
+          </label>
+          <p class="auth-error" id="authError" hidden></p>
+          <button type="submit" class="btn-primary" id="authSubmitBtn">Sign in</button>
+        </form>
+
+        <button type="button" class="btn-ghost" id="authToggleModeBtn">
+          Need an account? Sign up
+        </button>
+      </div>
+    </div>
+
     <div id="app">
       <!-- ==================================================================
            PAGE: Home — search + at-a-glance rows built from your library
@@ -156,7 +191,7 @@
           <div class="profile-avatar-row">
             <div class="profile-avatar" id="profileAvatar">T</div>
             <div class="profile-id">
-              <div class="profile-name">Your library</div>
+              <div class="profile-name" id="profileEmail">Your library</div>
               <div class="profile-sub" id="profileSummary">0 titles tracked</div>
             </div>
           </div>
@@ -180,7 +215,16 @@
             </svg>
           </button>
 
-          <p class="version-tag">Trackia · offline-first tracker</p>
+          <button class="settings-row" id="signOutBtn" type="button">
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M17 7l-1.41 1.41L17.17 10H8v2h9.17l-1.58 1.59L17 15l4-4-4-4zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"
+              />
+            </svg>
+            <span>Sign out</span>
+          </button>
+
+          <p class="version-tag">Trackia · synced with your account</p>
         </div>
       </div>
 
@@ -590,35 +634,12 @@
               community-run service — grab your own key at
               themoviedb.org/settings/api and paste it below. Nothing is sent
               anywhere except TMDB's servers, and only when you tap Fetch.
-              This key also powers the Home page's search and recommendation
-              rows for movies and series.
             </p>
             <label class="field">
               <span>TMDB API key</span>
               <input
                 type="text"
                 id="tmdbApiKeyInput"
-                placeholder="Paste your key here"
-                autocomplete="off"
-                spellcheck="false"
-              />
-            </label>
-          </div>
-
-          <div class="settings-group">
-            <h3>Book search</h3>
-            <p class="settings-hint">
-              Powers book search and recommendations on the Home page. Works
-              out of the box using Open Library (free, no key). Add a free
-              Google Books key at
-              console.cloud.google.com/apis/library/books.googleapis.com for
-              richer results — ratings, descriptions, and better cover art.
-            </p>
-            <label class="field">
-              <span>Google Books API key (optional)</span>
-              <input
-                type="text"
-                id="googleBooksApiKeyInput"
                 placeholder="Paste your key here"
                 autocomplete="off"
                 spellcheck="false"

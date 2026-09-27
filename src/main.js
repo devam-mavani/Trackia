@@ -1,8 +1,8 @@
-import { App } from '@capacitor/app';
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { initThemedSelects, syncThemedSelect } from './themedSelect.js';
+import { supabase, COVERS_BUCKET } from './supabaseClient.js';
 import '@fontsource-variable/outfit';
 
 /* ---------------------------------------------------------------------- */
@@ -48,7 +48,6 @@ function loadSettings() {
     tileSize: 'medium',
     theme: { '--c-bg': '', '--c-surface': '', '--c-accent': '', '--c-text': '' },
     tmdbApiKey: '',
-    googleBooksApiKey: '',
   };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -60,6 +59,164 @@ function loadSettings() {
 
 function saveSettings(settings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Cloud sync (Supabase)                                                  */
+/*                                                                          */
+/*  `entries` stays the in-memory source of truth for rendering, and       */
+/*  loadEntries()/saveEntries() still mirror it to localStorage as a small */
+/*  offline cache (covers now live in Storage as URLs, not base64, so      */
+/*  that cache stays tiny). Every mutation is also pushed to Supabase in   */
+/*  the background; if that push fails (offline, etc.) it's queued and    */
+/*  retried the next time we have a session and connectivity.             */
+/* ---------------------------------------------------------------------- */
+
+const PENDING_KEY = 'trackia_pending_sync_v1';
+let currentUserId = null;
+
+function loadPending() {
+  try {
+    const raw = localStorage.getItem(PENDING_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePending(list) {
+  localStorage.setItem(PENDING_KEY, JSON.stringify(list));
+}
+
+function queuePending(op) {
+  const pending = loadPending();
+  pending.push(op);
+  savePending(pending);
+}
+
+function rowToEntry(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    type: row.type,
+    season: row.season || '',
+    progress: row.progress || 0,
+    total: row.total,
+    status: row.status,
+    rating: row.rating || 0,
+    notes: row.notes || '',
+    tags: row.tags || [],
+    cover: row.cover || null,
+    tmdbId: row.tmdb_id || null,
+    genreIds: row.genre_ids || [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function entryToRow(entry, userId) {
+  return {
+    id: entry.id,
+    user_id: userId,
+    title: entry.title,
+    type: entry.type,
+    season: entry.season || '',
+    progress: entry.progress || 0,
+    total: entry.total,
+    status: entry.status,
+    rating: entry.rating || 0,
+    notes: entry.notes || '',
+    tags: entry.tags || [],
+    cover: entry.cover || null,
+    tmdb_id: entry.tmdbId || null,
+    genre_ids: entry.genreIds || [],
+    created_at: entry.createdAt,
+    updated_at: entry.updatedAt,
+  };
+}
+
+async function pullEntriesFromCloud() {
+  const { data, error } = await supabase
+    .from('entries')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data || []).map(rowToEntry);
+}
+
+async function syncUpsert(entry) {
+  if (!currentUserId) return;
+  const { error } = await supabase.from('entries').upsert(entryToRow(entry, currentUserId));
+  if (error) queuePending({ op: 'upsert', entry });
+}
+
+async function syncDelete(id) {
+  if (!currentUserId) return;
+  const { error } = await supabase.from('entries').delete().eq('id', id);
+  if (error) queuePending({ op: 'delete', id });
+}
+
+async function flushPendingSync() {
+  if (!currentUserId) return;
+  const pending = loadPending();
+  if (!pending.length) return;
+  const remaining = [];
+  for (const item of pending) {
+    try {
+      if (item.op === 'upsert') {
+        const { error } = await supabase.from('entries').upsert(entryToRow(item.entry, currentUserId));
+        if (error) remaining.push(item);
+      } else if (item.op === 'delete') {
+        const { error } = await supabase.from('entries').delete().eq('id', item.id);
+        if (error) remaining.push(item);
+      }
+    } catch {
+      remaining.push(item);
+    }
+  }
+  savePending(remaining);
+}
+
+function dataUrlToBlob(dataUrl) {
+  const [head, base64] = dataUrl.split(',');
+  const mime = head.match(/data:(.*);base64/)?.[1] || 'image/jpeg';
+  const bytes = atob(base64);
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+// If an entry's cover is still a locally-embedded data: URL, upload it to
+// the user's folder in the `covers` storage bucket and swap the field over
+// to the resulting public URL. Remote "From link" covers and already-
+// uploaded covers (https:// URLs) are left untouched. Returns true if the
+// entry's cover field changed (caller should re-save/re-render).
+async function ensureCoverUploaded(entry) {
+  if (!currentUserId || !entry.cover || !entry.cover.startsWith('data:')) return false;
+  try {
+    const blob = dataUrlToBlob(entry.cover);
+    const path = `${currentUserId}/${entry.id}.jpg`;
+    const { error: uploadError } = await supabase.storage
+      .from(COVERS_BUCKET)
+      .upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+    if (uploadError) return false;
+    const { data } = supabase.storage.from(COVERS_BUCKET).getPublicUrl(path);
+    entry.cover = data.publicUrl;
+    return true;
+  } catch {
+    return false; // stays as a local data: URL, retried next time this entry is synced
+  }
+}
+
+// Uploads a just-added/edited entry's cover (if needed) then pushes the
+// row — run in the background after the optimistic local save so the UI
+// never waits on the network.
+async function syncEntryFull(id) {
+  const entry = entries.find((x) => x.id === id);
+  if (!entry) return;
+  const coverChanged = await ensureCoverUploaded(entry);
+  if (coverChanged) { saveEntries(entries); render(); if (currentPage === 'home') renderHome(); }
+  await syncUpsert(entry);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -79,10 +236,6 @@ const state = {
   draftCover: null,
   draftTmdbId: null,
   draftGenreIds: [],
-  draftMalId: null,
-  draftBookId: null,
-  draftBookGenres: [],
-  draftGenreNames: [],
 };
 
 /* ---------------------------------------------------------------------- */
@@ -126,35 +279,6 @@ bottomNav.addEventListener('click', (e) => {
   if (!btn) return;
   showPage(btn.dataset.page);
 });
-
-/* ---------------------------------------------------------------------- */
-/*  Android hardware back button — close things instead of exiting        */
-/* ---------------------------------------------------------------------- */
-
-if (window.Capacitor?.isNativePlatform?.()) {
-  App.addListener('backButton', () => {
-    // 1) An open sheet (add/edit, detail, settings) takes priority — close it.
-    const openSheetEl = ALL_SHEETS.find((s) => !s.hidden);
-    if (openSheetEl) {
-      if (openSheetEl === detailSheet) closeDetailCard();
-      else closeSheet(openSheetEl);
-      return;
-    }
-    // 2) An open search-results dropdown on Home.
-    if (!homeSearchResults.hidden) {
-      homeSearchResults.hidden = true;
-      return;
-    }
-    // 3) Not on Home — go back to Home instead of leaving the app.
-    if (currentPage !== 'home') {
-      showPage('home');
-      return;
-    }
-    // 4) Already at the root with nothing open — send the app to the
-    // background (like the Home button) rather than killing it outright.
-    App.minimizeApp();
-  });
-}
 
 /* ---------------------------------------------------------------------- */
 /*  Init settings application                                              */
@@ -311,13 +435,6 @@ function renderCard(e) {
   body.appendChild(title);
   body.appendChild(status);
 
-  if (e.genreNames && e.genreNames.length) {
-    const genreBadge = document.createElement('span');
-    genreBadge.className = 'badge badge-genre';
-    genreBadge.textContent = e.genreNames.slice(0, 2).join(' · ');
-    body.appendChild(genreBadge);
-  }
-
   const unit = UNIT_BY_TYPE[e.type] || 'progress';
   if (unit !== 'watch' || e.total) {
     const track = document.createElement('div');
@@ -424,6 +541,7 @@ function bumpProgress(id) {
   saveEntries(entries);
   render();
   if (currentPage === 'home') renderHome();
+  syncUpsert(e);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -627,30 +745,14 @@ async function getGenreNameMap() {
 
 // Genre ids across the library, most common first, weighted slightly by
 // rating so a well-liked title counts a bit more than an unrated one.
-// Scoped to `entryTypes` because numeric genre ids come from different
-// providers (TMDB vs Jikan) and aren't comparable across them.
-function topGenreIds(n, entryTypes) {
+function topGenreIds(n) {
   const counts = new Map();
-  entries.filter((e) => entryTypes.includes(e.type)).forEach((e) => {
+  entries.forEach((e) => {
     (e.genreIds || []).forEach((id) => {
       counts.set(id, (counts.get(id) || 0) + 1 + (e.rating ? e.rating / 10 : 0));
     });
   });
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([id]) => id);
-}
-
-// Most common book subjects across your book entries — subjects are plain
-// strings (no numeric id space), so no cross-provider collision risk.
-function topBookSubjects(n) {
-  const counts = new Map();
-  entries.filter((e) => e.type === 'book').forEach((e) => {
-    (e.bookGenres || []).forEach((subject) => {
-      const key = subject.trim();
-      if (!key) return;
-      counts.set(key, (counts.get(key) || 0) + 1 + (e.rating ? e.rating / 10 : 0));
-    });
-  });
-  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([subject]) => subject);
 }
 
 // A broad spread of popular TMDB genres, used to fill out the Home page
@@ -663,7 +765,7 @@ const DEFAULT_GENRES = [
 ];
 
 async function buildFeaturedGenres() {
-  const topIds = topGenreIds(3, ['movie', 'series', 'anime']);
+  const topIds = topGenreIds(3);
   const nameMap = await getGenreNameMap().catch(() => new Map());
   const seen = new Set();
   const featured = [];
@@ -711,7 +813,7 @@ function makeLoadMoreCard(onActivate) {
 
 // Builds one horizontally-scrolling, paginated TMDB row. `fetchPage(page)`
 // must resolve to an array of TMDB-shaped hits for that page (1-indexed).
-async function createPaginatedRow(title, fetchPage, cardRenderer) {
+async function createPaginatedTmdbRow(title, fetchPage) {
   const first = await fetchPage(1);
   if (!first.length) return null;
 
@@ -725,7 +827,7 @@ async function createPaginatedRow(title, fetchPage, cardRenderer) {
   const scroll = document.createElement('div');
   scroll.className = 'hscroll';
   section.appendChild(scroll);
-  first.forEach((hit) => scroll.appendChild(cardRenderer(hit)));
+  first.forEach((hit) => scroll.appendChild(renderTmdbCard(hit)));
 
   let page = 1;
   let moreCard = null;
@@ -737,7 +839,7 @@ async function createPaginatedRow(title, fetchPage, cardRenderer) {
       page += 1;
       moreCard.remove();
       moreCard = null;
-      next.forEach((hit) => scroll.appendChild(cardRenderer(hit)));
+      next.forEach((hit) => scroll.appendChild(renderTmdbCard(hit)));
       if (next.length >= ROW_PAGE_SIZE) attachMoreCard();
     });
     scroll.appendChild(moreCard);
@@ -747,232 +849,13 @@ async function createPaginatedRow(title, fetchPage, cardRenderer) {
   return section;
 }
 
-/* ---- Manga/Manhwa/Manhua trending & genre-based discovery (Jikan) ----
-   Same pagination/caching shape as the TMDB rows above, backed by
-   MyAnimeList's manga database via Jikan (free, keyless). */
-const jikanPageCache = new Map(); // cacheKey -> { at, pages: Map(page -> items) }
-let jikanGenreCache = null; // { at, map }
-
-async function fetchJikanPage(cacheKey, path) {
-  let bucket = jikanPageCache.get(cacheKey);
-  if (bucket && Date.now() - bucket.at > TMDB_CACHE_TTL) bucket = null;
-  if (!bucket) {
-    bucket = { at: Date.now(), pages: new Map() };
-    jikanPageCache.set(cacheKey, bucket);
-  }
-  if (bucket.pages.has(path)) return bucket.pages.get(path);
-  const data = await jikanRequest(path);
-  const items = (data.data || []).map(normalizeJikanHit);
-  bucket.pages.set(path, items);
-  return items;
-}
-
-function fetchMangaTrendingPage(page) {
-  return fetchJikanPage('trending', `/top/manga?page=${page}&limit=${ROW_PAGE_SIZE}`);
-}
-
-function fetchMangaGenrePage(genreId, page) {
-  return fetchJikanPage(`genre:${genreId}`, `/manga?genres=${genreId}&order_by=popularity&sort=asc&page=${page}&limit=${ROW_PAGE_SIZE}`);
-}
-
-async function getJikanGenreMap() {
-  if (jikanGenreCache && Date.now() - jikanGenreCache.at < TMDB_CACHE_TTL) return jikanGenreCache.map;
-  const map = new Map();
-  try {
-    const data = await jikanRequest('/genres/manga');
-    (data.data || []).forEach((g) => map.set(g.mal_id, g.name));
-  } catch (err) {
-    console.error('Jikan genre list fetch failed:', err);
-  }
-  jikanGenreCache = { at: Date.now(), map };
-  return map;
-}
-
-// A handful of popular manga genres to fall back on before your own manga
-// shelf has much genre data. Ids are MyAnimeList's manga genre ids.
-const DEFAULT_MANGA_GENRES = [
-  [1, 'Action'], [4, 'Comedy'], [8, 'Drama'], [10, 'Fantasy'],
-  [7, 'Mystery'], [22, 'Romance'], [24, 'Sci-Fi'], [37, 'Supernatural'],
-];
-
-async function buildFeaturedMangaGenres() {
-  const topIds = topGenreIds(3, ['manga']);
-  const nameMap = await getJikanGenreMap();
-  const seen = new Set();
-  const featured = [];
-  topIds.forEach((id) => {
-    if (seen.has(id)) return;
-    seen.add(id);
-    featured.push({ id, name: nameMap.get(id) || 'Recommended', personal: true });
-  });
-  DEFAULT_MANGA_GENRES.forEach(([id, name]) => {
-    if (featured.length >= 5) return;
-    if (seen.has(id)) return;
-    seen.add(id);
-    featured.push({ id, name, personal: false });
-  });
-  return featured;
-}
-
-function renderMangaDiscoveryCard(hit) {
-  const card = document.createElement('article');
-  card.className = 'hcard';
-
-  const cover = document.createElement('div');
-  cover.className = 'hcard-cover';
-  if (hit.cover) {
-    const img = document.createElement('img');
-    img.src = hit.cover;
-    img.alt = hit.title;
-    cover.appendChild(img);
-  } else {
-    cover.style.background = colorForString(hit.title);
-    const span = document.createElement('span');
-    span.className = 'initial';
-    span.textContent = initials(hit.title);
-    cover.appendChild(span);
-  }
-
-  const owned = entries.find((e) => e.malId && String(e.malId) === String(hit.id));
-  if (owned) {
-    const badge = document.createElement('span');
-    badge.className = 'hcard-rating';
-    badge.textContent = 'In list';
-    cover.appendChild(badge);
-  } else if (hit.rating) {
-    const badge = document.createElement('span');
-    badge.className = 'hcard-rating';
-    badge.textContent = `★ ${hit.rating.toFixed(1)}`;
-    cover.appendChild(badge);
-  }
-
-  const titleEl = document.createElement('div');
-  titleEl.className = 'hcard-title';
-  titleEl.textContent = hit.title;
-
-  const sub = document.createElement('div');
-  sub.className = 'hcard-sub';
-  sub.textContent = hit.subtitle || 'Manga';
-
-  card.appendChild(cover);
-  card.appendChild(titleEl);
-  card.appendChild(sub);
-  card.addEventListener('click', () => {
-    if (owned) openDetailSheet(owned.id);
-    else openEntrySheetFromManga(hit);
-  });
-  return card;
-}
-
-/* ---- Book genre ("subject") discovery, via Open Library ----
-   Open Library's /subjects endpoint is keyless and works regardless of
-   whether a Google Books key is set, so it powers these browse rows even
-   though search itself may prefer Google Books when a key is present. */
-const bookSubjectPageCache = new Map(); // subjectSlug -> { at, pages: Map(page -> items) }
-
-function slugifySubject(name) {
-  return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '_');
-}
-
-async function fetchBookSubjectPage(subjectName, page) {
-  const slug = slugifySubject(subjectName);
-  let bucket = bookSubjectPageCache.get(slug);
-  if (bucket && Date.now() - bucket.at > TMDB_CACHE_TTL) bucket = null;
-  if (!bucket) {
-    bucket = { at: Date.now(), pages: new Map() };
-    bookSubjectPageCache.set(slug, bucket);
-  }
-  if (bucket.pages.has(page)) return bucket.pages.get(page);
-
-  const limit = ROW_PAGE_SIZE;
-  const offset = (page - 1) * limit;
-  const res = await fetchWithTimeout(`https://openlibrary.org/subjects/${encodeURIComponent(slug)}.json?limit=${limit}&offset=${offset}`, undefined, 12000);
-  if (!res.ok) throw new Error('open_library_subject_failed');
-  const data = await res.json();
-  const items = (data.works || []).map((w) => normalizeOpenLibraryWork(w, subjectName));
-  bucket.pages.set(page, items);
-  return items;
-}
-
-// A spread of popular subjects to fall back on before your own book shelf
-// has much subject data.
-const DEFAULT_BOOK_SUBJECTS = ['Fiction', 'Fantasy', 'Mystery and detective stories', 'Romance', 'Science fiction', 'Biography'];
-
-function buildFeaturedBookSubjects() {
-  const topNames = topBookSubjects(2);
-  const seen = new Set(topNames.map((s) => s.toLowerCase()));
-  const featured = topNames.map((name) => ({ name, personal: true }));
-  DEFAULT_BOOK_SUBJECTS.forEach((name) => {
-    if (featured.length >= 4) return;
-    if (seen.has(name.toLowerCase())) return;
-    seen.add(name.toLowerCase());
-    featured.push({ name, personal: false });
-  });
-  return featured;
-}
-
-function renderBookDiscoveryCard(hit) {
-  const card = document.createElement('article');
-  card.className = 'hcard';
-
-  const cover = document.createElement('div');
-  cover.className = 'hcard-cover';
-  if (hit.cover) {
-    const img = document.createElement('img');
-    img.src = hit.cover;
-    img.alt = hit.title;
-    img.addEventListener('error', () => {
-      img.remove();
-      cover.style.background = colorForString(hit.title);
-      const span = document.createElement('span');
-      span.className = 'initial';
-      span.textContent = initials(hit.title);
-      cover.insertBefore(span, cover.firstChild);
-    });
-    cover.appendChild(img);
-  } else {
-    cover.style.background = colorForString(hit.title);
-    const span = document.createElement('span');
-    span.className = 'initial';
-    span.textContent = initials(hit.title);
-    cover.appendChild(span);
-  }
-
-  const owned = entries.find((e) => e.bookId && e.bookId === String(hit.id));
-  if (owned) {
-    const badge = document.createElement('span');
-    badge.className = 'hcard-rating';
-    badge.textContent = 'In list';
-    cover.appendChild(badge);
-  }
-
-  const titleEl = document.createElement('div');
-  titleEl.className = 'hcard-title';
-  titleEl.textContent = hit.title;
-
-  const sub = document.createElement('div');
-  sub.className = 'hcard-sub';
-  sub.textContent = hit.subtitle || 'Book';
-
-  card.appendChild(cover);
-  card.appendChild(titleEl);
-  card.appendChild(sub);
-  card.addEventListener('click', () => {
-    if (owned) openDetailSheet(owned.id);
-    else openEntrySheetFromBook(hit);
-  });
-  return card;
-}
-
 let homeRenderToken = 0;
 
-async function buildMovieDiscoveryRows(token) {
-  if (!settings.tmdbApiKey) return [];
-  const rows = [];
+async function renderTmdbDiscoveryRows(token) {
   try {
-    const row = await createPaginatedRow('Trending movies & series', fetchTrendingPage, renderTmdbCard);
-    if (token !== homeRenderToken) return rows;
-    if (row) rows.push(row);
+    const row = await createPaginatedTmdbRow('Trending this week', fetchTrendingPage);
+    if (token !== homeRenderToken) return;
+    if (row) homeSections.appendChild(row);
   } catch (err) {
     console.error('TMDB trending fetch failed:', err);
   }
@@ -984,89 +867,18 @@ async function buildMovieDiscoveryRows(token) {
     console.error('TMDB genre list fetch failed:', err);
     featured = DEFAULT_GENRES.map(([id, name]) => ({ id, name, personal: false }));
   }
-  if (token !== homeRenderToken) return rows;
+  if (token !== homeRenderToken) return;
 
   for (const genre of featured) {
-    if (token !== homeRenderToken) return rows;
+    if (token !== homeRenderToken) return;
     try {
       const label = genre.personal ? `Because you like ${genre.name}` : genre.name;
-      const row = await createPaginatedRow(label, (page) => fetchGenrePage(genre.id, page), renderTmdbCard);
-      if (token !== homeRenderToken) return rows;
-      if (row) rows.push(row);
+      const row = await createPaginatedTmdbRow(label, (page) => fetchGenrePage(genre.id, page));
+      if (token !== homeRenderToken) return;
+      if (row) homeSections.appendChild(row);
     } catch (err) {
       console.error(`TMDB genre row failed (${genre.name}):`, err);
     }
-  }
-  return rows;
-}
-
-async function buildMangaDiscoveryRows(token) {
-  const rows = [];
-  try {
-    const row = await createPaginatedRow('Trending manga', fetchMangaTrendingPage, renderMangaDiscoveryCard);
-    if (token !== homeRenderToken) return rows;
-    if (row) rows.push(row);
-  } catch (err) {
-    console.error('Jikan trending fetch failed:', err);
-  }
-
-  let featured;
-  try {
-    featured = await buildFeaturedMangaGenres();
-  } catch (err) {
-    console.error('Jikan genre list fetch failed:', err);
-    featured = DEFAULT_MANGA_GENRES.map(([id, name]) => ({ id, name, personal: false }));
-  }
-  if (token !== homeRenderToken) return rows;
-
-  for (const genre of featured) {
-    if (token !== homeRenderToken) return rows;
-    try {
-      const label = genre.personal ? `Because you read ${genre.name}` : `${genre.name} manga`;
-      const row = await createPaginatedRow(label, (page) => fetchMangaGenrePage(genre.id, page), renderMangaDiscoveryCard);
-      if (token !== homeRenderToken) return rows;
-      if (row) rows.push(row);
-    } catch (err) {
-      console.error(`Manga genre row failed (${genre.name}):`, err);
-    }
-  }
-  return rows;
-}
-
-async function buildBookDiscoveryRows(token) {
-  const rows = [];
-  const subjects = buildFeaturedBookSubjects();
-  for (const subject of subjects) {
-    if (token !== homeRenderToken) return rows;
-    try {
-      const label = subject.personal ? `Because you read ${subject.name}` : `Popular in ${subject.name}`;
-      const row = await createPaginatedRow(label, (page) => fetchBookSubjectPage(subject.name, page), renderBookDiscoveryCard);
-      if (token !== homeRenderToken) return rows;
-      if (row) rows.push(row);
-    } catch (err) {
-      console.error(`Book subject row failed (${subject.name}):`, err);
-    }
-  }
-  return rows;
-}
-
-// Rows from all three providers are interleaved (rather than grouped
-// provider-by-provider) so Home reads like a mixed Netflix/Prime-style
-// feed instead of three separate stacked lists. Books are lower-frequency
-// (one row per two "slots") since there tend to be fewer of them.
-async function renderDiscoveryRows(token) {
-  const [movieRows, mangaRows, bookRows] = await Promise.all([
-    buildMovieDiscoveryRows(token),
-    buildMangaDiscoveryRows(token),
-    buildBookDiscoveryRows(token),
-  ]);
-  if (token !== homeRenderToken) return;
-
-  const max = Math.max(movieRows.length, mangaRows.length, bookRows.length * 2);
-  for (let i = 0; i < max; i += 1) {
-    if (movieRows[i]) homeSections.appendChild(movieRows[i]);
-    if (mangaRows[i]) homeSections.appendChild(mangaRows[i]);
-    if (i % 2 === 0 && bookRows[i / 2]) homeSections.appendChild(bookRows[i / 2]);
   }
 }
 
@@ -1118,20 +930,17 @@ function renderHome() {
     hint.className = 'search-status-msg';
     hint.style.padding = '4px 18px 14px';
     hint.style.textAlign = 'left';
-    hint.innerHTML = 'Add a free TMDB API key in <button type="button" class="link-btn" id="homeAddKeyHint">Settings</button> to also see trending movies & series here.';
+    hint.innerHTML = 'Add a free TMDB API key in <button type="button" class="link-btn" id="homeAddKeyHint">Settings</button> to see trending titles and genre-based picks.';
     homeSections.appendChild(hint);
     const link = hint.querySelector('#homeAddKeyHint');
     if (link) link.addEventListener('click', () => { showPage('profile'); setTimeout(() => openSheet(menuSheet), 200); });
+  } else {
+    renderTmdbDiscoveryRows(token);
   }
-
-  // Manga (Jikan) and books (Open Library) work with no key at all, so
-  // discovery rows always run — only the movie/series row-builder inside
-  // renderDiscoveryRows skips itself when there's no TMDB key.
-  renderDiscoveryRows(token);
 }
 
 /* ---------------------------------------------------------------------- */
-/*  Home page — universal title search (movies/series + manga + books)    */
+/*  Home page — TMDB title search (add-by-search)                         */
 /* ---------------------------------------------------------------------- */
 
 const homeSearchInput = $('#homeSearchInput');
@@ -1149,148 +958,90 @@ function tmdbYear(hit) {
   return d ? d.slice(0, 4) : '';
 }
 
-// Normalizes hits from every provider into one shape so they can render and
-// dispatch identically: { title, subtitle, cover, tag, ownerId, activate }.
-function normalizeSearchRow(kind, hit) {
-  if (kind === 'tmdb') {
-    const mediaType = hit.media_type === 'movie' ? 'movie' : 'tv';
-    const owned = entries.find((e) => e.tmdbId && String(e.tmdbId) === String(hit.id));
-    return {
-      title: hit.title || hit.name || 'Untitled',
-      subtitle: [tmdbYear(hit), mediaType === 'movie' ? 'Movie' : 'Series'].filter(Boolean).join(' · '),
-      cover: hit.poster_path ? `https://image.tmdb.org/t/p/w200${hit.poster_path}` : null,
-      owned,
-      activate: () => (owned ? openDetailSheet(owned.id) : openEntrySheetFromSearch(hit, mediaType)),
-    };
-  }
-  if (kind === 'manga') {
-    const owned = entries.find((e) => e.malId && String(e.malId) === String(hit.id));
-    return {
-      title: hit.title,
-      subtitle: [hit.year, hit.subtitle].filter(Boolean).join(' · '),
-      cover: hit.cover,
-      owned,
-      activate: () => (owned ? openDetailSheet(owned.id) : openEntrySheetFromManga(hit)),
-    };
-  }
-  // books
-  const owned = entries.find((e) => e.bookId && e.bookId === String(hit.id));
-  return {
-    title: hit.title,
-    subtitle: [hit.year, hit.subtitle].filter(Boolean).join(' · ') || 'Book',
-    cover: hit.cover,
-    owned,
-    activate: () => (owned ? openDetailSheet(owned.id) : openEntrySheetFromBook(hit)),
-  };
-}
-
-function renderSearchRow(row) {
-  const el = document.createElement('div');
-  el.className = 'search-hit';
-
-  const cover = document.createElement('div');
-  cover.className = 'search-hit-cover';
-  if (row.cover) {
-    const img = document.createElement('img');
-    img.src = row.cover;
-    img.alt = '';
-    img.addEventListener('error', () => {
-      img.remove();
-      cover.style.background = colorForString(row.title);
-      const span = document.createElement('span');
-      span.className = 'initial';
-      span.textContent = initials(row.title);
-      cover.insertBefore(span, cover.firstChild);
-    });
-    cover.appendChild(img);
-  } else {
-    cover.style.background = colorForString(row.title);
-    const span = document.createElement('span');
-    span.className = 'initial';
-    span.textContent = initials(row.title);
-    cover.appendChild(span);
-  }
-
-  const info = document.createElement('div');
-  info.className = 'search-hit-info';
-  info.innerHTML = `
-    <div class="search-hit-title">${escapeHtml(row.title)}</div>
-    <div class="search-hit-meta">${escapeHtml(row.subtitle)}</div>
-  `;
-
-  const tag = document.createElement('span');
-  tag.className = 'search-hit-tag';
-  tag.textContent = row.owned ? 'In list' : '+ Add';
-
-  el.appendChild(cover);
-  el.appendChild(info);
-  el.appendChild(tag);
-  el.addEventListener('click', () => {
-    homeSearchResults.hidden = true;
-    homeSearchInput.blur();
-    row.activate();
-  });
-  return el;
-}
-
-function renderSearchHits(rows) {
+function renderSearchHits(hits) {
   homeSearchResults.innerHTML = '';
-  if (!rows.length) {
-    showSearchStatus('No matches — try a different title.');
+  if (!hits.length) {
+    showSearchStatus("No matches on TMDB — try a different title.");
     return;
   }
-  rows.forEach((row) => homeSearchResults.appendChild(renderSearchRow(row)));
+  hits.forEach((hit) => {
+    const mediaType = hit.media_type === 'movie' ? 'movie' : 'tv';
+    const title = hit.title || hit.name || 'Untitled';
+    const row = document.createElement('div');
+    row.className = 'search-hit';
+
+    const cover = document.createElement('div');
+    cover.className = 'search-hit-cover';
+    if (hit.poster_path) {
+      const img = document.createElement('img');
+      img.src = `https://image.tmdb.org/t/p/w200${hit.poster_path}`;
+      img.alt = '';
+      cover.appendChild(img);
+    } else {
+      cover.style.background = colorForString(title);
+      const span = document.createElement('span');
+      span.className = 'initial';
+      span.textContent = initials(title);
+      cover.appendChild(span);
+    }
+
+    const info = document.createElement('div');
+    info.className = 'search-hit-info';
+    const year = tmdbYear(hit);
+    info.innerHTML = `
+      <div class="search-hit-title">${escapeHtml(title)}</div>
+      <div class="search-hit-meta">${year ? escapeHtml(year) + ' · ' : ''}${mediaType === 'movie' ? 'Movie' : 'Series'}</div>
+    `;
+
+    const alreadyHave = entries.find((e) => e.tmdbId && String(e.tmdbId) === String(hit.id));
+    const tag = document.createElement('span');
+    tag.className = 'search-hit-tag';
+    tag.textContent = alreadyHave ? 'In list' : '+ Add';
+
+    row.appendChild(cover);
+    row.appendChild(info);
+    row.appendChild(tag);
+
+    row.addEventListener('click', () => {
+      homeSearchResults.hidden = true;
+      homeSearchInput.blur();
+      if (alreadyHave) {
+        openDetailSheet(alreadyHave.id);
+      } else {
+        openEntrySheetFromSearch(hit, mediaType);
+      }
+    });
+
+    homeSearchResults.appendChild(row);
+  });
   homeSearchResults.hidden = false;
 }
 
 async function runHomeSearch(query) {
-  const token = ++homeSearchToken;
-  showSearchStatus('Searching…');
-
-  const lookups = [];
-
-  if (settings.tmdbApiKey) {
-    lookups.push(
-      (async () => {
-        const [url, opts] = tmdbRequest('/search/multi', { query, include_adult: 'false' });
-        const res = await fetchWithTimeout(url, opts, 12000);
-        if (res.status === 401) throw new Error('tmdb_unauthorized');
-        if (!res.ok) throw new Error('tmdb_failed');
-        const data = await res.json();
-        return (data.results || [])
-          .filter((r) => r.media_type === 'movie' || r.media_type === 'tv')
-          .slice(0, 6)
-          .map((hit) => normalizeSearchRow('tmdb', hit));
-      })(),
-    );
-  }
-
-  lookups.push(
-    searchManga(query).then((hits) => hits.slice(0, 6).map((hit) => normalizeSearchRow('manga', hit))),
-  );
-  lookups.push(
-    searchBooks(query).then((hits) => hits.slice(0, 6).map((hit) => normalizeSearchRow('book', hit))),
-  );
-
-  const settled = await Promise.allSettled(lookups);
-  if (token !== homeSearchToken) return; // a newer keystroke superseded this request
-
-  const rows = settled.filter((r) => r.status === 'fulfilled').flatMap((r) => r.value);
-  const allFailed = settled.every((r) => r.status === 'rejected');
-
-  if (!settings.tmdbApiKey && !rows.length) {
-    showSearchStatus('Add a free TMDB API key in <button type="button" class="link-btn" id="searchOpenSettingsLink">Settings</button> to also search movies & series.');
+  const apiKey = settings.tmdbApiKey;
+  if (!apiKey) {
+    showSearchStatus('Add a free TMDB API key in <button type="button" class="link-btn" id="searchOpenSettingsLink">Settings</button> to search.');
     const link = $('#searchOpenSettingsLink');
     if (link) link.addEventListener('click', () => { homeSearchResults.hidden = true; showPage('profile'); setTimeout(() => openSheet(menuSheet), 200); });
     return;
   }
 
-  if (allFailed) {
-    showSearchStatus("Couldn't reach any title database — check your connection.");
-    return;
+  const token = ++homeSearchToken;
+  showSearchStatus('Searching…');
+  try {
+    const [url, opts] = tmdbRequest('/search/multi', { query, include_adult: 'false' });
+    const res = await fetchWithTimeout(url, opts, 12000);
+    if (token !== homeSearchToken) return; // a newer keystroke superseded this request
+    if (res.status === 401) { showSearchStatus('TMDB rejected that API key — double check it in Settings.'); return; }
+    if (!res.ok) { showSearchStatus('TMDB error — try again shortly.'); return; }
+    const data = await res.json();
+    const hits = (data.results || []).filter((r) => r.media_type === 'movie' || r.media_type === 'tv').slice(0, 10);
+    if (token !== homeSearchToken) return;
+    renderSearchHits(hits);
+  } catch (err) {
+    if (token !== homeSearchToken) return;
+    showSearchStatus(err.name === 'AbortError' ? 'TMDB took too long to respond.' : "Couldn't reach TMDB — check your connection.");
   }
-
-  renderSearchHits(rows);
 }
 
 homeSearchInput.addEventListener('input', () => {
@@ -1494,12 +1245,14 @@ $('#detailEditBtn').addEventListener('click', () => {
 $('#detailDeleteBtn').addEventListener('click', () => {
   if (!detailId) return;
   if (!confirm('Delete this entry? This cannot be undone.')) return;
-  entries = entries.filter((x) => x.id !== detailId);
+  const deletedId = detailId;
+  entries = entries.filter((x) => x.id !== deletedId);
   saveEntries(entries);
   render();
   if (currentPage === 'home') renderHome();
   closeDetailCard();
   showToast('Entry deleted');
+  syncDelete(deletedId);
 });
 
 /* ---------------------------------------------------------------------- */
@@ -1900,72 +1653,19 @@ function tmdbRequest(path, params = {}) {
 // Merge freshly-fetched genre names into the notes textarea as a single
 // "Genres: ..." line, replacing any previous genre line from an earlier
 // import but leaving the rest of whatever notes are already there intact.
-function upsertNoteLine(label, value) {
-  if (!value) return;
-  const line = `${label}: ${value}`;
-  const existingLines = f_notes.value.split('\n');
-  const idx = existingLines.findIndex((l) => l.trim().startsWith(`${label}:`));
-  if (idx !== -1) {
-    existingLines[idx] = line;
-    f_notes.value = existingLines.join('\n');
-  } else if (f_notes.value.trim()) {
-    f_notes.value = `${line}\n${f_notes.value}`;
-  } else {
-    f_notes.value = line;
-  }
-}
-
 function applyGenresToNotes(genreNames) {
   if (!genreNames.length) return;
-  upsertNoteLine('Genres', genreNames.join(', '));
-}
+  const genreLine = `Genres: ${genreNames.join(', ')}`;
+  const existingLines = f_notes.value.split('\n');
+  const genreLineIndex = existingLines.findIndex((l) => l.trim().startsWith('Genres:'));
 
-// Adds each genre as its own tag (deduped, case-insensitive) and repaints
-// the tag chip row — shared by every provider's import flow.
-function applyGenresToTags(genreNames) {
-  let changed = false;
-  genreNames.forEach((name) => {
-    if (!name) return;
-    const exists = state.draftTags.some((t) => t.toLowerCase() === name.toLowerCase());
-    if (!exists) { state.draftTags.push(name); changed = true; }
-  });
-  if (changed) renderTagChips();
-}
-
-function truncateText(str, max) {
-  if (!str) return '';
-  const clean = str.replace(/\s+/g, ' ').trim();
-  return clean.length > max ? `${clean.slice(0, max - 1).trim()}…` : clean;
-}
-
-// Strips HTML tags from provider descriptions (Google Books in particular
-// sometimes returns simple HTML) down to plain text for the notes field.
-function stripHtml(html) {
-  if (!html) return '';
-  const tmp = document.createElement('div');
-  tmp.innerHTML = html;
-  return (tmp.textContent || tmp.innerText || '').trim();
-}
-
-function applySummaryToNotes(summary) {
-  if (!summary) return;
-  upsertNoteLine('Summary', truncateText(summary, 500));
-}
-
-// Fetches a remote poster/cover URL, tries to embed it locally (cropped +
-// compressed, same as camera/gallery covers), and falls back to just using
-// the remote URL directly if that fails for any reason (CORS, timeout,
-// offline). Shared by every provider's import flow.
-async function embedRemoteCoverOrFallback(url, title) {
-  if (!url) return;
-  try {
-    const imgRes = await fetchWithTimeout(url, undefined, 12000);
-    if (!imgRes.ok) throw new Error('bad_image');
-    const blob = await imgRes.blob();
-    const dataUrl = await optimizeCoverImage(blob).catch(() => blobToDataUrl(blob));
-    setCoverPreview(dataUrl, title);
-  } catch {
-    setCoverPreview(url, title);
+  if (genreLineIndex !== -1) {
+    existingLines[genreLineIndex] = genreLine;
+    f_notes.value = existingLines.join('\n');
+  } else if (f_notes.value.trim()) {
+    f_notes.value = `${genreLine}\n${f_notes.value}`;
+  } else {
+    f_notes.value = genreLine;
   }
 }
 
@@ -1998,10 +1698,9 @@ async function importTmdbHit(hit, mediaType) {
   }
 
   // Genre names aren't in the /find or /search response (only numeric
-  // genre_ids), so pull them from the movie/tv details endpoint — along
-  // with the overview, used as a notes summary. Best-effort: if it fails,
-  // the rest of the import above has already succeeded, so we just skip
-  // it quietly.
+  // genre_ids), so pull them from the movie/tv details endpoint and drop
+  // them into notes. Best-effort: if it fails, the rest of the import
+  // above has already succeeded, so we just skip it quietly.
   try {
     const detailsPath = mediaType === 'movie' ? `/movie/${hit.id}` : `/tv/${hit.id}`;
     const [detailsUrl, detailsOpts] = tmdbRequest(detailsPath);
@@ -2009,12 +1708,8 @@ async function importTmdbHit(hit, mediaType) {
     if (detailsRes.ok) {
       const details = await detailsRes.json();
       const genres = details.genres || [];
-      const genreNames = genres.map((g) => g.name).filter(Boolean);
+      applyGenresToNotes(genres.map((g) => g.name).filter(Boolean));
       state.draftGenreIds = genres.map((g) => g.id).filter((id) => id != null);
-      state.draftGenreNames = genreNames;
-      applyGenresToTags(genreNames);
-      applyGenresToNotes(genreNames);
-      applySummaryToNotes(details.overview || hit.overview || '');
     }
   } catch (err) {
     console.error('TMDB genre fetch failed:', err);
@@ -2094,184 +1789,6 @@ async function openEntrySheetFromSearch(hit, mediaType) {
   } catch (err) {
     console.error('TMDB import failed:', err);
     showToast("Couldn't reach TMDB — check your connection");
-  }
-}
-
-/* ---------------------------------------------------------------------- */
-/*  Manga / Manhwa / Manhua search + import — via Jikan (unofficial MAL    */
-/*  API, free, keyless).                                                  */
-/* ---------------------------------------------------------------------- */
-
-async function jikanRequest(path) {
-  const res = await fetchWithTimeout(`https://api.jikan.moe/v4${path}`, undefined, 12000);
-  if (!res.ok) throw new Error(`jikan_failed:${path}`);
-  return res.json();
-}
-
-function normalizeJikanHit(m) {
-  return {
-    provider: 'manga',
-    id: m.mal_id,
-    title: m.title || (m.titles && m.titles[0] && m.titles[0].title) || 'Untitled',
-    subtitle: m.type || 'Manga', // Manga / Manhwa / Manhua / Novel / One-shot
-    year: m.published && m.published.from ? String(new Date(m.published.from).getFullYear()) : '',
-    cover: (m.images && (m.images.jpg?.image_url || m.images.webp?.image_url)) || null,
-    genres: (m.genres || []).map((g) => g.name),
-    genreIds: (m.genres || []).map((g) => g.mal_id),
-    rating: m.score || null,
-    synopsis: m.synopsis || '',
-  };
-}
-
-async function searchManga(query) {
-  const data = await jikanRequest(`/manga?q=${encodeURIComponent(query)}&limit=10`);
-  return (data.data || []).map(normalizeJikanHit);
-}
-
-async function importMangaHit(hit) {
-  if (hit.title) f_title.value = hit.title;
-  f_type.value = 'manga';
-  updateUnitLabels();
-  syncThemedSelect(f_type);
-  state.draftMalId = hit.id != null ? String(hit.id) : null;
-  state.draftGenreIds = hit.genreIds || [];
-  state.draftGenreNames = hit.genres || [];
-  applyGenresToTags(hit.genres || []);
-  applyGenresToNotes(hit.genres || []);
-  applySummaryToNotes(hit.synopsis || '');
-  await embedRemoteCoverOrFallback(hit.cover, hit.title);
-}
-
-async function openEntrySheetFromManga(hit) {
-  openEntrySheet(null);
-  showToast('Importing from MyAnimeList…');
-  try {
-    await importMangaHit(hit);
-    showToast('Imported — review and save');
-  } catch (err) {
-    console.error('Manga import failed:', err);
-    showToast("Couldn't reach MyAnimeList — check your connection");
-  }
-}
-
-/* ---------------------------------------------------------------------- */
-/*  Book search + import — Google Books when a key is set in Settings,    */
-/*  Open Library (keyless) otherwise or as a fallback.                    */
-/* ---------------------------------------------------------------------- */
-
-function normalizeGoogleBookHit(item) {
-  const info = item.volumeInfo || {};
-  const thumb = info.imageLinks && (info.imageLinks.thumbnail || info.imageLinks.smallThumbnail);
-  return {
-    provider: 'book',
-    source: 'google',
-    id: item.id,
-    title: info.title || 'Untitled',
-    subtitle: (info.authors || []).join(', '),
-    year: (info.publishedDate || '').slice(0, 4),
-    cover: thumb ? thumb.replace('http://', 'https://') : null,
-    genres: info.categories || [],
-    rating: info.averageRating || null,
-    description: info.description || '',
-  };
-}
-
-function normalizeOpenLibraryDoc(doc) {
-  return {
-    provider: 'book',
-    source: 'openlibrary',
-    id: doc.key,
-    title: doc.title || 'Untitled',
-    subtitle: (doc.author_name || []).join(', '),
-    year: doc.first_publish_year ? String(doc.first_publish_year) : '',
-    cover: doc.cover_i ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg` : null,
-    genres: (doc.subject || []).slice(0, 5),
-    rating: null,
-  };
-}
-
-function normalizeOpenLibraryWork(w, fallbackSubject) {
-  const cover = w.cover_id
-    ? `https://covers.openlibrary.org/b/id/${w.cover_id}-M.jpg`
-    : (w.cover_edition_key ? `https://covers.openlibrary.org/b/olid/${w.cover_edition_key}-M.jpg` : null);
-  return {
-    provider: 'book',
-    source: 'openlibrary',
-    id: w.key,
-    title: w.title || 'Untitled',
-    subtitle: (w.authors || []).map((a) => a.name).filter(Boolean).join(', '),
-    year: w.first_publish_year ? String(w.first_publish_year) : '',
-    cover,
-    genres: fallbackSubject ? [fallbackSubject] : [],
-    rating: null,
-  };
-}
-
-async function searchBooks(query) {
-  if (settings.googleBooksApiKey) {
-    try {
-      const params = new URLSearchParams({ q: query, maxResults: '10', key: settings.googleBooksApiKey });
-      const res = await fetchWithTimeout(`https://www.googleapis.com/books/v1/volumes?${params}`, undefined, 12000);
-      if (res.ok) {
-        const data = await res.json();
-        return (data.items || []).map(normalizeGoogleBookHit);
-      }
-    } catch (err) {
-      console.error('Google Books search failed, falling back to Open Library:', err);
-    }
-  }
-  const params = new URLSearchParams({ q: query, limit: '10', fields: 'key,title,author_name,first_publish_year,cover_i,subject' });
-  const res = await fetchWithTimeout(`https://openlibrary.org/search.json?${params}`, undefined, 12000);
-  if (!res.ok) throw new Error('open_library_search_failed');
-  const data = await res.json();
-  return (data.docs || []).map(normalizeOpenLibraryDoc);
-}
-
-// Open Library's search/subject endpoints don't include a description —
-// only the individual work resource does — so this is fetched lazily,
-// only when a hit from that source is actually imported.
-async function fetchOpenLibraryDescription(workKey) {
-  try {
-    const res = await fetchWithTimeout(`https://openlibrary.org${workKey}.json`, undefined, 12000);
-    if (!res.ok) return '';
-    const data = await res.json();
-    if (!data.description) return '';
-    return typeof data.description === 'string' ? data.description : (data.description.value || '');
-  } catch {
-    return '';
-  }
-}
-
-async function importBookHit(hit) {
-  if (hit.title) f_title.value = hit.title;
-  f_type.value = 'book';
-  updateUnitLabels();
-  syncThemedSelect(f_type);
-  state.draftBookId = hit.id != null ? String(hit.id) : null;
-  state.draftBookGenres = hit.genres || [];
-  state.draftGenreNames = hit.genres || [];
-  upsertNoteLine('Author', hit.subtitle);
-  applyGenresToTags(hit.genres || []);
-  applyGenresToNotes(hit.genres || []);
-
-  let summary = hit.description || '';
-  if (!summary && hit.source === 'openlibrary' && typeof hit.id === 'string' && hit.id.startsWith('/works/')) {
-    summary = await fetchOpenLibraryDescription(hit.id);
-  }
-  applySummaryToNotes(stripHtml(summary));
-
-  await embedRemoteCoverOrFallback(hit.cover, hit.title);
-}
-
-async function openEntrySheetFromBook(hit) {
-  openEntrySheet(null);
-  showToast('Importing book details…');
-  try {
-    await importBookHit(hit);
-    showToast('Imported — review and save');
-  } catch (err) {
-    console.error('Book import failed:', err);
-    showToast("Couldn't reach the book database — check your connection");
   }
 }
 
@@ -2434,10 +1951,6 @@ function resetForm() {
   state.editingId = null;
   state.draftTmdbId = null;
   state.draftGenreIds = [];
-  state.draftMalId = null;
-  state.draftBookId = null;
-  state.draftBookGenres = [];
-  state.draftGenreNames = [];
   imdbLinkInput.value = '';
   coverLinkRow.hidden = true;
   coverLinkInput.value = '';
@@ -2479,10 +1992,6 @@ function openEntrySheet(id) {
       state.draftTags = [...(e.tags || [])];
       state.draftTmdbId = e.tmdbId || null;
       state.draftGenreIds = e.genreIds || [];
-      state.draftMalId = e.malId || null;
-      state.draftBookId = e.bookId || null;
-      state.draftBookGenres = e.bookGenres || [];
-      state.draftGenreNames = e.genreNames || [];
       setCoverPreview(e.cover || null, e.title);
       renderTagChips();
       updateUnitLabels();
@@ -2526,18 +2035,17 @@ form.addEventListener('submit', (e) => {
     cover: state.draftCover,
     tmdbId: state.draftTmdbId,
     genreIds: state.draftGenreIds.slice(),
-    malId: state.draftMalId,
-    bookId: state.draftBookId,
-    bookGenres: state.draftBookGenres.slice(),
-    genreNames: state.draftGenreNames.slice(),
     updatedAt: Date.now(),
   };
 
+  let savedId;
   if (state.editingId) {
     const idx = entries.findIndex((x) => x.id === state.editingId);
     if (idx >= 0) entries[idx] = { ...entries[idx], ...payload };
+    savedId = state.editingId;
   } else {
-    entries.push({ id: crypto.randomUUID(), createdAt: Date.now(), ...payload });
+    savedId = crypto.randomUUID();
+    entries.push({ id: savedId, createdAt: Date.now(), ...payload });
   }
 
   saveEntries(entries);
@@ -2545,16 +2053,21 @@ form.addEventListener('submit', (e) => {
   if (currentPage === 'home') renderHome();
   closeSheet(entrySheet);
   showToast(state.editingId ? 'Entry updated' : 'Entry added');
+  // Cover upload + row upsert happen in the background so the sheet closes
+  // and the list updates instantly, without waiting on the network.
+  syncEntryFull(savedId);
 });
 
 deleteEntryBtn.addEventListener('click', () => {
   if (!state.editingId) return;
   if (!confirm('Delete this entry? This cannot be undone.')) return;
-  entries = entries.filter((x) => x.id !== state.editingId);
+  const deletedId = state.editingId;
+  entries = entries.filter((x) => x.id !== deletedId);
   saveEntries(entries);
   render();
   if (currentPage === 'home') renderHome();
   closeSheet(entrySheet);
+  syncDelete(deletedId);
   showToast('Entry deleted');
 });
 
@@ -2596,14 +2109,6 @@ const tmdbApiKeyInput = $('#tmdbApiKeyInput');
 tmdbApiKeyInput.value = settings.tmdbApiKey || '';
 tmdbApiKeyInput.addEventListener('change', () => {
   settings.tmdbApiKey = tmdbApiKeyInput.value.trim();
-  saveSettings(settings);
-});
-
-/* ---- Google Books API key (optional — Open Library is the keyless fallback) ---- */
-const googleBooksApiKeyInput = $('#googleBooksApiKeyInput');
-googleBooksApiKeyInput.value = settings.googleBooksApiKey || '';
-googleBooksApiKeyInput.addEventListener('change', () => {
-  settings.googleBooksApiKey = googleBooksApiKeyInput.value.trim();
   saveSettings(settings);
 });
 
@@ -2695,6 +2200,9 @@ $('#optimizeCoversBtn').addEventListener('click', async () => {
   btn.disabled = false;
   btn.textContent = originalLabel;
   showToast(changed ? `Optimized ${changed} cover${changed === 1 ? '' : 's'}` : "Couldn't optimize any covers");
+  // These may still be local-only (e.g. added before cloud sync was set
+  // up) — push each one to Storage/the entries table in the background.
+  targets.forEach((e) => syncEntryFull(e.id));
 });
 
 /* ---- Export / Import ---- */
@@ -2756,10 +2264,12 @@ $('#importFile').addEventListener('change', async (e) => {
     if (!Array.isArray(incoming)) throw new Error('Invalid file');
 
     const existingIds = new Set(entries.map((x) => x.id));
+    const importedIds = [];
     let added = 0;
     incoming.forEach((raw) => {
       const id = raw.id && !existingIds.has(raw.id) ? raw.id : crypto.randomUUID();
       existingIds.add(id);
+      importedIds.push(id);
       entries.push({
         id,
         title: raw.title || 'Untitled',
@@ -2774,10 +2284,6 @@ $('#importFile').addEventListener('change', async (e) => {
         cover: raw.cover || null,
         tmdbId: raw.tmdbId || null,
         genreIds: Array.isArray(raw.genreIds) ? raw.genreIds : [],
-        malId: raw.malId || null,
-        bookId: raw.bookId || null,
-        bookGenres: Array.isArray(raw.bookGenres) ? raw.bookGenres : [],
-        genreNames: Array.isArray(raw.genreNames) ? raw.genreNames : [],
         createdAt: raw.createdAt || Date.now(),
         updatedAt: raw.updatedAt || Date.now(),
       });
@@ -2788,6 +2294,9 @@ $('#importFile').addEventListener('change', async (e) => {
     render();
     if (currentPage === 'home') renderHome();
     showToast(`Imported ${added} entr${added === 1 ? 'y' : 'ies'}`);
+    // Upload any embedded covers and push the imported rows in the
+    // background — a big import shouldn't freeze the UI on the network.
+    importedIds.forEach((id) => syncEntryFull(id));
   } catch (err) {
     showToast('Could not read that file');
   } finally {
@@ -2897,6 +2406,124 @@ function showToast(msg) {
 }
 
 /* ---------------------------------------------------------------------- */
+/*  Auth                                                                   */
+/* ---------------------------------------------------------------------- */
+
+const authGate = $('#authGate');
+const authForm = $('#authForm');
+const authEmail = $('#authEmail');
+const authPassword = $('#authPassword');
+const authError = $('#authError');
+const authSubmitBtn = $('#authSubmitBtn');
+const authToggleModeBtn = $('#authToggleModeBtn');
+const authSub = $('#authSub');
+const profileEmail = $('#profileEmail');
+
+let authMode = 'signin'; // 'signin' | 'signup'
+
+function setAuthMode(mode) {
+  authMode = mode;
+  authError.hidden = true;
+  if (mode === 'signin') {
+    authSub.textContent = 'Sign in to sync your library';
+    authSubmitBtn.textContent = 'Sign in';
+    authToggleModeBtn.textContent = 'Need an account? Sign up';
+  } else {
+    authSub.textContent = 'Create an account to start syncing';
+    authSubmitBtn.textContent = 'Sign up';
+    authToggleModeBtn.textContent = 'Already have an account? Sign in';
+  }
+}
+
+authToggleModeBtn.addEventListener('click', () => setAuthMode(authMode === 'signin' ? 'signup' : 'signin'));
+
+authForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  authError.hidden = true;
+  authSubmitBtn.disabled = true;
+  const email = authEmail.value.trim();
+  const password = authPassword.value;
+  try {
+    if (authMode === 'signin') {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+    } else {
+      const { data, error } = await supabase.auth.signUp({ email, password });
+      if (error) throw error;
+      // If email confirmation is turned on in the Supabase project, a new
+      // sign-up gets a session of null until the link is clicked.
+      if (!data.session) {
+        authError.hidden = false;
+        authError.textContent = 'Account created — check your email to confirm, then sign in.';
+        setAuthMode('signin');
+        authSubmitBtn.disabled = false;
+        return;
+      }
+    }
+    // onAuthStateChange below picks up the new session and boots the app.
+  } catch (err) {
+    authError.hidden = false;
+    authError.textContent = err.message || 'Something went wrong — try again.';
+  } finally {
+    authSubmitBtn.disabled = false;
+  }
+});
+
+$('#signOutBtn').addEventListener('click', async () => {
+  if (!confirm('Sign out?')) return;
+  await supabase.auth.signOut();
+  // onAuthStateChange below clears local state and shows the auth gate.
+});
+
+function showAuthGate() {
+  authGate.hidden = false;
+  authForm.reset();
+  authSubmitBtn.disabled = false;
+}
+
+function hideAuthGate() {
+  authGate.hidden = true;
+}
+
+// Runs once per sign-in: pulls the account's library from Supabase (or
+// falls back to whatever's cached locally if that fails, e.g. offline),
+// then boots the rest of the UI.
+async function enterApp(session) {
+  currentUserId = session.user.id;
+  profileEmail.textContent = session.user.email || 'Your library';
+  hideAuthGate();
+
+  try {
+    entries = await pullEntriesFromCloud();
+    saveEntries(entries);
+  } catch {
+    // Offline or request failed — keep using the local cache and retry
+    // the pending queue (and a fresh pull) once we're back online.
+    entries = loadEntries();
+  }
+
+  render();
+  showPage('home');
+  flushPendingSync();
+}
+
+function leaveApp() {
+  currentUserId = null;
+  entries = [];
+  saveEntries(entries);
+  savePending([]);
+  render();
+  showAuthGate();
+}
+
+window.addEventListener('online', () => flushPendingSync());
+
+supabase.auth.onAuthStateChange((event, session) => {
+  if (session) enterApp(session);
+  else leaveApp();
+});
+
+/* ---------------------------------------------------------------------- */
 /*  Boot                                                                   */
 /* ---------------------------------------------------------------------- */
 
@@ -2913,5 +2540,9 @@ if (brandLogo) {
 initThemedSelects();
 applySettings();
 updateUnitLabels();
-render();
-showPage('home');
+
+// supabase-js fires onAuthStateChange once immediately on subscribe with
+// whatever session it finds (or null), so that listener alone decides
+// whether enterApp() or leaveApp() runs first — nothing else to do here.
+// The auth gate starts visible in the HTML itself so there's no flash of
+// the (empty) library before that first callback resolves.
