@@ -192,7 +192,7 @@ body[data-tile="large"] {
   background: transparent;
   border: none;
   color: var(--c-text-dim);
-  width: 76px;
+  width: 68px;
   padding: 9px 4px 8px;
   border-radius: 999px;
   transition:
@@ -261,6 +261,45 @@ body[data-tile="large"] {
 }
 .home-search input::placeholder {
   color: var(--c-text-dim);
+}
+/* The pill already draws the focus ring (:focus-within). Without this the
+   global input:focus-visible outline also boxes the inner <input>, and the
+   native search cancel button shifts it — which is what looked misaligned
+   when the bar was tapped. */
+.home-search input,
+.home-search input:focus,
+.home-search input:focus-visible {
+  outline: none;
+  box-shadow: none;
+  -webkit-appearance: none;
+  appearance: none;
+  line-height: 1.2;
+}
+.home-search input::-webkit-search-cancel-button,
+.home-search input::-webkit-search-decoration,
+.home-search input::-webkit-search-results-button,
+.home-search input::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  display: none;
+}
+.home-search-clear {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin-right: -4px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.home-search-clear[hidden] { display: none; }
+.home-search-clear svg {
+  width: 16px;
+  height: 16px;
+  fill: var(--c-text-dim);
 }
 
 .home-search-results {
@@ -552,6 +591,37 @@ body[data-tile="large"] {
   font-size: 1.5rem;
   font-weight: 700;
   flex: none;
+  position: relative;
+  border: none;
+  padding: 0;
+  overflow: visible;
+}
+.profile-avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.profile-avatar-badge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--c-surface-2, #222);
+  border: 1px solid var(--glass-edge);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+}
+.profile-avatar-badge svg {
+  width: 11px;
+  height: 11px;
+  fill: #fff;
 }
 .profile-name {
   font-family: var(--font-display);
@@ -2041,3 +2111,173 @@ textarea:focus-visible {
     transition-duration: 0.01ms;
   }
 }
+
+
+/* ---------- Profile name ---------- */
+.profile-id { min-width: 0; flex: 1; }
+.profile-name-btn {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  cursor: pointer;
+}
+.profile-name-btn .profile-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-name-btn svg { width: 14px; height: 14px; fill: var(--c-text-dim); flex: none; }
+.profile-name-btn:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; border-radius: 6px; }
+.profile-name-input {
+  width: 100%;
+  background: var(--glass-fill-soft);
+  border: 1px solid var(--glass-edge-strong);
+  border-radius: 10px;
+  padding: 7px 10px;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--c-text);
+  outline: none;
+}
+.profile-name-input[hidden] { display: none; }
+
+/* ---------- Rankings tab ---------- */
+.rank-add-btn { padding: 8px 16px; font-size: 0.85rem; }
+.rank-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 4px 18px 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.rank-tabs::-webkit-scrollbar { display: none; }
+.rank-tab {
+  flex: none;
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-edge);
+  color: var(--c-text-dim);
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 7px 14px;
+  border-radius: 999px;
+}
+.rank-tab.active {
+  background: var(--c-accent);
+  border-color: transparent;
+  color: #fff;
+}
+.rank-hint {
+  margin: 0;
+  padding: 0 20px 8px;
+  font-size: 0.75rem;
+  color: var(--c-text-dim);
+}
+.rank-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 18px 110px;
+}
+.rank-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-edge);
+  border-radius: 14px;
+  padding: 8px 10px 8px 12px;
+  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+  user-select: none;
+  -webkit-user-select: none;
+}
+.rank-item.dragging {
+  z-index: 30;
+  border-color: var(--c-accent);
+  box-shadow: var(--glass-shadow-lg);
+  transition: none;
+}
+.rank-num {
+  flex: none;
+  width: 26px;
+  text-align: center;
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--c-text-dim);
+}
+.rank-item[data-pos="1"] .rank-num { color: #f5c542; }
+.rank-item[data-pos="2"] .rank-num { color: #c9d1d9; }
+.rank-item[data-pos="3"] .rank-num { color: #d08a4e; }
+.rank-cover {
+  flex: none;
+  width: 42px;
+  height: 60px;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.rank-cover img { width: 100%; height: 100%; object-fit: cover; }
+.rank-cover .initial { color: #fff; font-weight: 700; opacity: 0.9; }
+.rank-info { flex: 1; min-width: 0; cursor: pointer; }
+.rank-title {
+  font-size: 0.92rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rank-meta { font-size: 0.75rem; color: var(--c-text-dim); margin-top: 2px; }
+.rank-remove,
+.rank-handle {
+  flex: none;
+  width: 34px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.rank-remove svg,
+.rank-handle svg { width: 18px; height: 18px; fill: var(--c-text-dim); }
+.rank-handle { touch-action: none; cursor: grab; }
+
+.rank-pick-search {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--glass-fill-soft);
+  border: 1px solid var(--glass-edge);
+  border-radius: 12px;
+  padding: 11px 14px;
+  font-size: 0.92rem;
+  color: var(--c-text);
+  margin-bottom: 10px;
+  outline: none;
+}
+.rank-pick-search::-webkit-search-cancel-button { display: none; }
+.rank-pick-list { display: flex; flex-direction: column; gap: 6px; }
+.rank-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 12px;
+  padding: 6px;
+  color: inherit;
+}
+.rank-pick-item:active { background: var(--glass-fill); }
+.rank-pick-item .rank-cover { width: 36px; height: 52px; }
+.rank-pick-add { flex: none; font-size: 0.78rem; font-weight: 700; color: var(--c-accent); }
+.profile-name-btn[hidden] { display: none; }

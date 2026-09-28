@@ -257,7 +257,8 @@ const detailRecsGrid = $('#detailRecsGrid');
 const detailRecsStatus = $('#detailRecsStatus');
 const detailScrollEl = detailSheet.querySelector('.sheet-body');
 const personSheet = $('#personSheet');
-const ALL_SHEETS = [entrySheet, menuSheet, detailSheet, personSheet];
+const rankSheet = $('#rankSheet');
+const ALL_SHEETS = [entrySheet, menuSheet, detailSheet, personSheet, rankSheet];
 
 /* ---------------------------------------------------------------------- */
 /*  Pages (Home / Library / Profile) + bottom nav                         */
@@ -266,6 +267,7 @@ const ALL_SHEETS = [entrySheet, menuSheet, detailSheet, personSheet];
 const PAGES = {
   home: $('#page-home'),
   library: $('#page-library'),
+  rankings: $('#page-rankings'),
   profile: $('#page-profile'),
 };
 const bottomNav = $('#bottomNav');
@@ -302,6 +304,7 @@ function showPage(name) {
   moveNavIndicator();
   window.scrollTo({ top: 0 });
   if (name === 'home') renderHome();
+  if (name === 'rankings') renderRankings();
   if (name === 'profile') renderProfile();
 }
 
@@ -1278,8 +1281,16 @@ async function openPersonSheet(hit) {
   }
 }
 
+const homeSearchClear = $('#homeSearchClear');
+homeSearchClear.addEventListener('click', () => {
+  homeSearchInput.value = '';
+  homeSearchInput.dispatchEvent(new Event('input'));
+  homeSearchInput.focus();
+});
+
 homeSearchInput.addEventListener('input', () => {
   const q = homeSearchInput.value.trim();
+  homeSearchClear.hidden = !homeSearchInput.value;
   clearTimeout(homeSearchTimer);
   if (!q) { homeSearchResults.hidden = true; homeSearchResults.innerHTML = ''; return; }
   if (q.length < 2) { showSearchStatus('Keep typing…'); return; }
@@ -1305,6 +1316,376 @@ const breakdownList = $('#breakdownList');
 const profileSummary = $('#profileSummary');
 const profileAvatar = $('#profileAvatar');
 
+/* ---- Profile picture: stored in the account's folder of the `covers`
+   bucket (same per-user path rule as entry covers, so no new SQL policy)
+   and its URL kept in the Supabase user metadata so it follows the
+   account across devices. A local copy is cached for instant/offline
+   display. ---- */
+const profileAvatarImg = $('#profileAvatarImg');
+const profileAvatarInitial = $('#profileAvatarInitial');
+const profileAvatarInput = $('#profileAvatarInput');
+const AVATAR_CACHE_KEY = 'trackia.avatar';
+let avatarUrl = null;
+
+function renderAvatar() {
+  if (avatarUrl) {
+    profileAvatarImg.src = avatarUrl;
+    profileAvatarImg.hidden = false;
+    profileAvatarInitial.hidden = true;
+  } else {
+    profileAvatarImg.hidden = true;
+    profileAvatarInitial.hidden = false;
+    profileAvatarInitial.textContent = (displayName || profileEmail.textContent || 'T').trim().charAt(0).toUpperCase() || 'T';
+  }
+}
+
+function loadAvatarFromSession(user) {
+  const meta = user.user_metadata || {};
+  // Google sign-ins provide `picture`/`avatar_url`; a photo the person set
+  // themselves in Trackia (avatar_url) wins over the cached one.
+  avatarUrl = meta.avatar_url || meta.picture || localStorage.getItem(`${AVATAR_CACHE_KEY}.${user.id}`) || null;
+  renderAvatar();
+}
+
+// Center-crops to a square and downsizes to 256px JPEG so the upload is tiny.
+function resizeToAvatarBlob(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const size = 256;
+      const side = Math.min(img.width, img.height);
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      canvas.getContext('2d').drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode failed'))), 'image/jpeg', 0.88);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('bad image')); };
+    img.src = url;
+  });
+}
+
+profileAvatar.addEventListener('click', () => profileAvatarInput.click());
+
+profileAvatarInput.addEventListener('change', async () => {
+  const file = profileAvatarInput.files[0];
+  profileAvatarInput.value = '';
+  if (!file || !currentUserId) return;
+  try {
+    const blob = await resizeToAvatarBlob(file);
+    // Show it immediately from the local blob, upload in the background.
+    const localUrl = URL.createObjectURL(blob);
+    avatarUrl = localUrl;
+    renderAvatar();
+
+    const path = `${currentUserId}/avatar.jpg`;
+    const { error } = await supabase.storage.from(COVERS_BUCKET).upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+    if (error) throw error;
+    const { data } = supabase.storage.from(COVERS_BUCKET).getPublicUrl(path);
+    // Cache-bust so the new photo shows instead of the old cached one.
+    const publicUrl = `${data.publicUrl}?v=${Date.now()}`;
+    await supabase.auth.updateUser({ data: { avatar_url: publicUrl } });
+    avatarUrl = publicUrl;
+    try { localStorage.setItem(`${AVATAR_CACHE_KEY}.${currentUserId}`, publicUrl); } catch {}
+    renderAvatar();
+    showToast('Profile picture updated');
+  } catch (err) {
+    console.error(err);
+    showToast("Couldn't update your profile picture");
+  }
+});
+
+/* ---- Display name: kept in the Supabase user metadata (follows the
+   account across devices) with a local cache for instant display. ---- */
+const profileNameBtn = $('#profileName');
+const profileNameText = $('#profileNameText');
+const profileNameInput = $('#profileNameInput');
+const NAME_CACHE_KEY = 'trackia.name';
+let displayName = '';
+
+function renderName() {
+  profileNameText.textContent = displayName || 'Add your name';
+  profileNameText.style.opacity = displayName ? '1' : '0.6';
+  renderAvatar();
+}
+
+function loadNameFromSession(user) {
+  const meta = user.user_metadata || {};
+  displayName = (meta.display_name || localStorage.getItem(`${NAME_CACHE_KEY}.${user.id}`) || '').trim();
+  renderName();
+}
+
+function startNameEdit() {
+  profileNameInput.value = displayName;
+  profileNameBtn.hidden = true;
+  profileNameInput.hidden = false;
+  profileNameInput.focus();
+  profileNameInput.select();
+}
+
+async function finishNameEdit(save) {
+  if (profileNameInput.hidden) return;
+  const next = profileNameInput.value.trim().slice(0, 40);
+  profileNameInput.hidden = true;
+  profileNameBtn.hidden = false;
+  if (!save || next === displayName || !currentUserId) return;
+  displayName = next;
+  try { localStorage.setItem(`${NAME_CACHE_KEY}.${currentUserId}`, next); } catch {}
+  renderName();
+  const { error } = await supabase.auth.updateUser({ data: { display_name: next } });
+  if (error) showToast('Saved on this device only — couldn\u2019t sync your name');
+  else showToast('Name updated');
+}
+
+profileNameBtn.addEventListener('click', startNameEdit);
+profileNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); finishNameEdit(true); }
+  if (e.key === 'Escape') finishNameEdit(false);
+});
+profileNameInput.addEventListener('blur', () => finishNameEdit(true));
+
+/* ---------------------------------------------------------------------- */
+/*  Rankings tab — personal, drag-to-reorder lists (All / per type)       */
+/*                                                                        */
+/*  A ranking is just an ordered array of entry ids per list. It's kept   */
+/*  locally and mirrored to `<userId>/rankings.json` in the covers bucket */
+/*  (same per-user folder rule as covers/avatar), so there's no schema    */
+/*  change and it follows the account across devices.                     */
+/* ---------------------------------------------------------------------- */
+
+const RANK_LISTS = [
+  ['all', 'All'], ['movie', 'Movies'], ['series', 'Series'],
+  ['anime', 'Anime'], ['manga', 'Manga'], ['book', 'Books'],
+];
+const rankTabsEl = $('#rankTabs');
+const rankListEl = $('#rankList');
+const rankEmptyEl = $('#rankEmpty');
+const rankHintEl = $('#rankHint');
+const rankPickListEl = $('#rankPickList');
+const rankPickSearch = $('#rankPickSearch');
+let rankings = { updatedAt: 0, lists: {} };
+let currentRankList = 'all';
+let rankSyncTimer = null;
+
+const rankKey = () => `trackia.rankings.${currentUserId}`;
+
+function loadRankingsLocal() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(rankKey()) || 'null');
+    rankings = raw && raw.lists ? raw : { updatedAt: 0, lists: {} };
+  } catch { rankings = { updatedAt: 0, lists: {} }; }
+}
+
+function saveRankings() {
+  rankings.updatedAt = Date.now();
+  try { localStorage.setItem(rankKey(), JSON.stringify(rankings)); } catch {}
+  clearTimeout(rankSyncTimer);
+  rankSyncTimer = setTimeout(pushRankingsToCloud, 1200);
+}
+
+async function pushRankingsToCloud() {
+  if (!currentUserId) return;
+  try {
+    const blob = new Blob([JSON.stringify(rankings)], { type: 'application/json' });
+    await supabase.storage.from(COVERS_BUCKET).upload(`${currentUserId}/rankings.json`, blob, { contentType: 'application/json', upsert: true });
+  } catch { /* stays local; pushed again on the next change */ }
+}
+
+async function pullRankingsFromCloud() {
+  if (!currentUserId) return;
+  try {
+    const { data, error } = await supabase.storage.from(COVERS_BUCKET).download(`${currentUserId}/rankings.json`);
+    if (error || !data) return;
+    const cloud = JSON.parse(await data.text());
+    if (cloud && cloud.lists && (cloud.updatedAt || 0) > (rankings.updatedAt || 0)) {
+      rankings = cloud;
+      try { localStorage.setItem(rankKey(), JSON.stringify(rankings)); } catch {}
+      if (currentPage === 'rankings') renderRankings();
+    }
+  } catch { /* offline or no cloud copy yet */ }
+}
+
+// The ids in a list that still exist (and still match the list's type).
+function rankedIds(listKey) {
+  const ids = rankings.lists[listKey] || [];
+  const valid = ids.filter((id) => {
+    const e = entries.find((x) => x.id === id);
+    return e && (listKey === 'all' || e.type === listKey);
+  });
+  if (valid.length !== ids.length) rankings.lists[listKey] = valid;
+  return valid;
+}
+
+function makeRankCover(e, cls = 'rank-cover') {
+  const cover = document.createElement('div');
+  cover.className = cls;
+  cover.style.background = e.cover ? 'transparent' : colorForString(e.title || e.id);
+  if (e.cover) {
+    const img = document.createElement('img');
+    img.src = e.cover;
+    img.alt = '';
+    img.loading = 'lazy';
+    cover.appendChild(img);
+  } else {
+    const span = document.createElement('span');
+    span.className = 'initial';
+    span.textContent = initials(e.title);
+    cover.appendChild(span);
+  }
+  return cover;
+}
+
+function renderRankings() {
+  rankTabsEl.innerHTML = RANK_LISTS.map(([key, label]) =>
+    `<button type="button" class="rank-tab${key === currentRankList ? ' active' : ''}" data-list="${key}">${label}</button>`).join('');
+
+  const ids = rankedIds(currentRankList);
+  rankListEl.innerHTML = '';
+  rankEmptyEl.hidden = ids.length !== 0;
+  rankHintEl.hidden = ids.length < 2;
+
+  ids.forEach((id, i) => {
+    const e = entries.find((x) => x.id === id);
+    const row = document.createElement('div');
+    row.className = 'rank-item';
+    row.dataset.id = id;
+    row.dataset.pos = String(i + 1);
+
+    const num = document.createElement('span');
+    num.className = 'rank-num';
+    num.textContent = String(i + 1);
+
+    const info = document.createElement('div');
+    info.className = 'rank-info';
+    info.innerHTML = `<div class="rank-title">${escapeHtml(e.title)}</div>
+      <div class="rank-meta">${escapeHtml(TYPE_LABEL[e.type] || e.type)}${e.rating ? ` · ★ ${e.rating}` : ''}</div>`;
+    info.addEventListener('click', () => openDetailSheet(id));
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'rank-remove';
+    remove.setAttribute('aria-label', 'Remove from ranking');
+    remove.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6.4 5L5 6.4l5.6 5.6L5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6 6.4 5z"/></svg>';
+    remove.addEventListener('click', () => {
+      rankings.lists[currentRankList] = rankedIds(currentRankList).filter((x) => x !== id);
+      saveRankings();
+      renderRankings();
+    });
+
+    const handle = document.createElement('span');
+    handle.className = 'rank-handle';
+    handle.setAttribute('aria-label', 'Drag to reorder');
+    handle.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 15h18v-2H3v2zm0 4h18v-2H3v2zm0-8h18V9H3v2zm0-6v2h18V5H3z"/></svg>';
+
+    row.append(num, makeRankCover(e), info, remove, handle);
+    rankListEl.appendChild(row);
+  });
+}
+
+rankTabsEl.addEventListener('click', (ev) => {
+  const btn = ev.target.closest('.rank-tab');
+  if (!btn) return;
+  currentRankList = btn.dataset.list;
+  renderRankings();
+});
+
+/* ---- Drag to reorder: the row follows the finger; when its centre passes
+   a neighbour's midpoint the two swap in the DOM. The final DOM order is
+   what gets saved. ---- */
+rankListEl.addEventListener('pointerdown', (ev) => {
+  const handle = ev.target.closest('.rank-handle');
+  if (!handle) return;
+  const item = handle.closest('.rank-item');
+  ev.preventDefault();
+  handle.setPointerCapture(ev.pointerId);
+  item.classList.add('dragging');
+  let startY = ev.clientY;
+
+  const renumber = () => [...rankListEl.children].forEach((el, i) => {
+    el.dataset.pos = String(i + 1);
+    el.querySelector('.rank-num').textContent = String(i + 1);
+  });
+
+  const move = (m) => {
+    item.style.transform = `translateY(${m.clientY - startY}px)`;
+    const swapWith = (sib) => {
+      const before = item.getBoundingClientRect().top;
+      if (sib === item.nextElementSibling) rankListEl.insertBefore(sib, item);
+      else rankListEl.insertBefore(item, sib);
+      startY += item.getBoundingClientRect().top - before;
+      item.style.transform = `translateY(${m.clientY - startY}px)`;
+      renumber();
+    };
+    const r = item.getBoundingClientRect();
+    const c = r.top + r.height / 2;
+    const next = item.nextElementSibling;
+    const prev = item.previousElementSibling;
+    if (next) { const nr = next.getBoundingClientRect(); if (c > nr.top + nr.height / 2) swapWith(next); }
+    if (prev) { const pr = prev.getBoundingClientRect(); if (c < pr.top + pr.height / 2) swapWith(prev); }
+    // Nudge the page when dragging near the top/bottom edge.
+    if (m.clientY < 90) window.scrollBy(0, -10);
+    else if (m.clientY > window.innerHeight - 150) window.scrollBy(0, 10);
+  };
+  const end = () => {
+    handle.removeEventListener('pointermove', move);
+    handle.removeEventListener('pointerup', end);
+    handle.removeEventListener('pointercancel', end);
+    item.classList.remove('dragging');
+    item.style.transform = '';
+    rankings.lists[currentRankList] = [...rankListEl.children].map((el) => el.dataset.id);
+    saveRankings();
+  };
+  handle.addEventListener('pointermove', move);
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+});
+
+/* ---- Picker sheet: add library entries to the current ranking ---- */
+function renderRankPicker() {
+  const q = rankPickSearch.value.trim().toLowerCase();
+  const inList = new Set(rankedIds(currentRankList));
+  const pool = entries
+    .filter((e) => (currentRankList === 'all' || e.type === currentRankList) && !inList.has(e.id))
+    .filter((e) => !q || (e.title || '').toLowerCase().includes(q))
+    .sort((a, b) => (b.rating || 0) - (a.rating || 0) || (a.title || '').localeCompare(b.title || ''));
+
+  rankPickListEl.innerHTML = '';
+  if (!pool.length) {
+    rankPickListEl.innerHTML = `<div class="search-status-msg">${entries.length ? 'Everything here is already ranked.' : 'Add some titles to your library first.'}</div>`;
+    return;
+  }
+  pool.forEach((e) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'rank-pick-item';
+    const info = document.createElement('div');
+    info.className = 'rank-info';
+    info.innerHTML = `<div class="rank-title">${escapeHtml(e.title)}</div>
+      <div class="rank-meta">${escapeHtml(TYPE_LABEL[e.type] || e.type)}${e.rating ? ` · ★ ${e.rating}` : ''}</div>`;
+    const add = document.createElement('span');
+    add.className = 'rank-pick-add';
+    add.textContent = '+ Rank';
+    row.append(makeRankCover(e), info, add);
+    row.addEventListener('click', () => {
+      rankings.lists[currentRankList] = [...rankedIds(currentRankList), e.id];
+      saveRankings();
+      renderRankings();
+      renderRankPicker();
+    });
+    rankPickListEl.appendChild(row);
+  });
+}
+
+$('#rankAddBtn').addEventListener('click', () => {
+  const label = RANK_LISTS.find(([k]) => k === currentRankList)[1];
+  $('#rankSheetTitle').textContent = `Add to ${label} ranking`;
+  rankPickSearch.value = '';
+  renderRankPicker();
+  openSheet(rankSheet);
+});
+rankPickSearch.addEventListener('input', renderRankPicker);
+
 function renderProfile() {
   const total = entries.length;
   const completed = entries.filter((e) => e.status === 'completed').length;
@@ -1313,7 +1694,7 @@ function renderProfile() {
   const avgRating = rated.length ? (rated.reduce((sum, e) => sum + e.rating, 0) / rated.length).toFixed(1) : '—';
 
   profileSummary.textContent = `${total} title${total === 1 ? '' : 's'} tracked`;
-  profileAvatar.textContent = total ? initials(entries[0].title) : 'T';
+  renderAvatar();
 
   statsGrid.innerHTML = `
     <div class="stat-card"><div class="stat-value">${total}</div><div class="stat-label">Total</div></div>
@@ -1647,12 +2028,15 @@ backdrop.addEventListener('click', () => {
   if (!menuSheet.hidden) closeSheet(menuSheet);
   if (!detailSheet.hidden) closeDetailCard();
   if (!personSheet.hidden) closeSheet(personSheet);
+  if (!rankSheet.hidden) closeSheet(rankSheet);
 });
 
 wireSwipeToClose($('#sheetHandle'), entrySheet, () => closeSheet(entrySheet));
 wireSwipeToClose($('#menuHandle'), menuSheet, () => closeSheet(menuSheet));
 wireSwipeToClose($('#personHandle'), personSheet, () => closeSheet(personSheet));
 $('#personClose').addEventListener('click', () => closeSheet(personSheet));
+wireSwipeToClose($('#rankHandle'), rankSheet, () => closeSheet(rankSheet));
+$('#rankSheetClose').addEventListener('click', () => closeSheet(rankSheet));
 
 /* ---------------------------------------------------------------------- */
 /*  Entry form                                                             */
@@ -2843,11 +3227,15 @@ function hideAuthGate() {
 async function enterApp(session) {
   currentUserId = session.user.id;
   profileEmail.textContent = session.user.email || 'Your library';
+  loadNameFromSession(session.user);
+  loadAvatarFromSession(session.user);
+  loadRankingsLocal();
   hideAuthGate();
 
   try {
     entries = await pullEntriesFromCloud();
     saveEntries(entries);
+    pullRankingsFromCloud(); // background; re-renders if the cloud copy is newer
   } catch {
     // Offline or request failed — keep using the local cache and retry
     // the pending queue (and a fresh pull) once we're back online.
@@ -2864,6 +3252,9 @@ function leaveApp() {
   entries = [];
   saveEntries(entries);
   savePending([]);
+  avatarUrl = null;
+  displayName = '';
+  rankings = { updatedAt: 0, lists: {} };
   render();
   showAuthGate();
 }

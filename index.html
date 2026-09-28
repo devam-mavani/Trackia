@@ -76,6 +76,17 @@
               placeholder="Search movies, shows, actors, directors…"
               autocomplete="off"
             />
+            <button
+              type="button"
+              class="home-search-clear"
+              id="homeSearchClear"
+              aria-label="Clear search"
+              hidden
+            >
+              <svg viewBox="0 0 24 24">
+                <path d="M6.4 5L5 6.4l5.6 5.6L5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6 6.4 5z" />
+              </svg>
+            </button>
           </div>
           <div class="home-search-results" id="homeSearchResults" hidden></div>
         </div>
@@ -180,6 +191,26 @@
       <!-- ==================================================================
            PAGE: Profile — brief stats + entry point to settings
            ================================================================== -->
+      <div class="page" id="page-rankings" hidden>
+        <header class="topbar">
+          <div class="brand-wrap">
+            <h1 class="brand">Rankings</h1>
+          </div>
+          <button type="button" class="btn-primary rank-add-btn" id="rankAddBtn">+ Add</button>
+        </header>
+
+        <div class="rank-tabs" id="rankTabs"></div>
+        <p class="rank-hint" id="rankHint">Hold the handle and drag to reorder.</p>
+        <div class="rank-list" id="rankList"></div>
+
+        <div class="empty-state" id="rankEmpty" hidden>
+          <p class="empty-title">Nothing ranked yet</p>
+          <p class="empty-sub">
+            Tap “+ Add” to pick titles from your library and put them in order.
+          </p>
+        </div>
+      </div>
+
       <div class="page" id="page-profile" hidden>
         <header class="topbar">
           <div class="brand-wrap">
@@ -189,9 +220,26 @@
 
         <div class="profile-body">
           <div class="profile-avatar-row">
-            <div class="profile-avatar" id="profileAvatar">T</div>
+            <button
+              type="button"
+              class="profile-avatar"
+              id="profileAvatar"
+              aria-label="Change profile picture"
+            >
+              <span id="profileAvatarInitial">T</span>
+              <img id="profileAvatarImg" alt="" hidden />
+              <span class="profile-avatar-badge" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 100-6.4 3.2 3.2 0 000 6.4zM9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>
+              </span>
+            </button>
+            <input type="file" id="profileAvatarInput" accept="image/*" hidden />
             <div class="profile-id">
-              <div class="profile-name" id="profileEmail">Your library</div>
+              <button type="button" class="profile-name-btn" id="profileName" aria-label="Edit your name">
+                <span class="profile-name" id="profileNameText">Add your name</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+              </button>
+              <input type="text" class="profile-name-input" id="profileNameInput" maxlength="40" placeholder="Your name" autocomplete="off" hidden />
+              <div class="profile-sub" id="profileEmail">Your library</div>
               <div class="profile-sub" id="profileSummary">0 titles tracked</div>
             </div>
           </div>
@@ -244,6 +292,10 @@
             />
           </svg>
           <span>Movies</span>
+        </button>
+        <button class="nav-btn" data-page="rankings" aria-label="Rankings">
+          <svg viewBox="0 0 24 24"><path d="M7.5 21H2V9h5.5v12zm7.25-18h-5.5v18h5.5V3zM22 11h-5.5v10H22V11z"/></svg>
+          <span>Ranks</span>
         </button>
         <button class="nav-btn" data-page="profile" aria-label="Profile">
           <svg viewBox="0 0 24 24">
@@ -525,6 +577,23 @@
             <div class="tmdb-grid" id="detailRecsGrid"></div>
             <div class="search-status-msg" id="detailRecsStatus" hidden></div>
           </div>
+        </div>
+      </section>
+
+      <!-- Bottom sheet: pick library entries to add to a ranking -->
+      <section class="sheet" id="rankSheet" hidden>
+        <div class="sheet-handle" id="rankHandle"><span></span></div>
+        <div class="sheet-head">
+          <h2 id="rankSheetTitle">Add to ranking</h2>
+          <button class="icon-btn" id="rankSheetClose" aria-label="Done">
+            <svg viewBox="0 0 24 24">
+              <path d="M6.4 5L5 6.4l5.6 5.6L5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6 6.4 5z" />
+            </svg>
+          </button>
+        </div>
+        <div class="sheet-body">
+          <input type="search" class="rank-pick-search" id="rankPickSearch" placeholder="Filter your library…" autocomplete="off" />
+          <div class="rank-pick-list" id="rankPickList"></div>
         </div>
       </section>
 
