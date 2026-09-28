@@ -722,7 +722,7 @@ function renderTmdbCard(hit) {
   card.appendChild(sub);
   card.addEventListener('click', () => {
     if (owned) openDetailSheet(owned.id);
-    else openEntrySheetFromSearch(hit, mediaType);
+    else openTitlePreview(hit, mediaType);
   });
   return card;
 }
@@ -1105,7 +1105,7 @@ function renderSearchHits(hits) {
       if (alreadyHave) {
         openDetailSheet(alreadyHave.id);
       } else {
-        openEntrySheetFromSearch(hit, mediaType);
+        openTitlePreview(hit, mediaType);
       }
     });
 
@@ -1737,10 +1737,134 @@ const detailTags = $('#detailTags');
 const detailNotesWrap = $('#detailNotesWrap');
 const detailNotes = $('#detailNotes');
 
+/* ---- Title-card navigation ----
+   The card can show a library entry OR a TMDB title that isn't in the
+   library yet (a "preview" with an Add-to-list button). Tapping a title in
+   "More like this" swaps the card's content in place and pushes the
+   previous view onto a stack, so Back returns to it — instead of stacking
+   the add form on top of an open card. */
+let detailView = null;   // { kind: 'entry', id } | { kind: 'preview', hit, mediaType }
+let detailStack = [];
+const detailBackBtn = $('#detailBack');
+const detailOverview = $('#detailOverview');
+const detailEntryActions = $('#detailEntryActions');
+const detailPreviewActions = $('#detailPreviewActions');
+
+function navigateDetail(view) {
+  const isOpen = !detailSheet.hidden && detailSheet.classList.contains('open');
+  const sameEntry = isOpen && detailView && view.kind === 'entry' && detailView.kind === 'entry' && detailView.id === view.id;
+  if (!isOpen) detailStack = [];
+  else if (detailView && !sameEntry) detailStack.push(detailView);
+  showDetailView(view, isOpen);
+}
+
+function showDetailView(view, alreadyOpen) {
+  detailView = view;
+  detailBackBtn.hidden = detailStack.length === 0;
+  if (view.kind === 'entry') renderEntryDetail(view.id);
+  else renderPreviewDetail(view.hit, view.mediaType);
+  if (alreadyOpen) detailScrollEl.scrollTop = 0;
+  else openDetailCard();
+}
+
+detailBackBtn.addEventListener('click', () => {
+  const prev = detailStack.pop();
+  detailBackBtn.hidden = detailStack.length === 0;
+  if (!prev) return;
+  // A library entry may have been deleted/added meanwhile; skip dead ones.
+  if (prev.kind === 'entry' && !entries.some((x) => x.id === prev.id)) { detailBackBtn.click(); return; }
+  showDetailView(prev, true);
+});
+
 function openDetailSheet(id) {
+  if (!entries.some((x) => x.id === id)) return;
+  navigateDetail({ kind: 'entry', id });
+}
+
+function openTitlePreview(hit, mediaType) {
+  const owned = entries.find((e) => e.tmdbId && String(e.tmdbId) === String(hit.id));
+  if (owned) { openDetailSheet(owned.id); return; }
+  navigateDetail({ kind: 'preview', hit, mediaType });
+}
+
+function renderPreviewDetail(hit, mediaType) {
+  detailId = null;
+  const title = hit.title || hit.name || 'Untitled';
+
+  if (hit.poster_path) {
+    detailCoverImg.src = `https://image.tmdb.org/t/p/w500${hit.poster_path}`;
+    detailCoverImg.hidden = false;
+    detailCoverInitial.hidden = true;
+    detailCoverImg.onerror = () => { detailCoverImg.hidden = true; detailCoverInitial.hidden = false; };
+  } else {
+    detailCoverImg.hidden = true;
+    detailCoverImg.src = '';
+    detailCoverInitial.hidden = false;
+  }
+  detailCoverInitial.textContent = initials(title);
+  detailCover.style.background = hit.poster_path ? 'transparent' : colorForString(title);
+  detailCover.hidden = false;
+
+  detailBadges.innerHTML = `
+    <span class="badge badge-type">${mediaType === 'movie' ? 'Movie' : 'Series'}</span>
+    <span class="badge badge-status">Not in your list</span>
+    ${hit.vote_average ? `<span class="badge badge-rating">★ ${hit.vote_average.toFixed(1)}</span>` : ''}
+  `;
+  detailTitle.textContent = title;
+
+  const year = tmdbYear(hit);
+  detailMeta.textContent = year;
+  detailMeta.hidden = !year;
+
+  detailOverview.textContent = hit.overview || '';
+  detailOverview.hidden = !hit.overview;
+
+  detailProgressWrap.hidden = true;
+  detailTags.hidden = true;
+  detailNotesWrap.hidden = true;
+  detailEntryActions.hidden = true;
+  detailPreviewActions.hidden = false;
+
+  $('#detailAddBtn').onclick = () => {
+    closeDetailCard();
+    // The add form sits under later sheets in the stacking order, so close
+    // the person filmography if this card was opened from it.
+    if (!personSheet.hidden) closeSheet(personSheet);
+    openEntrySheetFromSearch(hit, mediaType);
+  };
+
+  startDetailRecs(mediaType, hit.id);
+
+  // Fill in runtime / seasons / genres (and the overview if the list result
+  // had none) without blocking the card from appearing.
+  if (settings.tmdbApiKey) {
+    (async () => {
+      try {
+        const [url, opts] = tmdbRequest(`/${mediaType}/${hit.id}`);
+        const res = await fetchWithTimeout(url, opts, 12000);
+        if (!res.ok || !detailView || detailView.hit !== hit) return;
+        const d = await res.json();
+        if (detailView.hit !== hit) return;
+        const bits = [];
+        if (year) bits.push(year);
+        if (mediaType === 'movie' && d.runtime) bits.push(`${d.runtime} min`);
+        if (mediaType === 'tv' && d.number_of_seasons) bits.push(`${d.number_of_seasons} season${d.number_of_seasons === 1 ? '' : 's'}`);
+        const genres = (d.genres || []).slice(0, 3).map((g) => g.name).join(', ');
+        if (genres) bits.push(genres);
+        if (bits.length) { detailMeta.textContent = bits.join(' · '); detailMeta.hidden = false; }
+        if (!hit.overview && d.overview) { detailOverview.textContent = d.overview; detailOverview.hidden = false; }
+      } catch { /* the basic card is already showing */ }
+    })();
+  }
+}
+
+function renderEntryDetail(id) {
   const e = entries.find((x) => x.id === id);
   if (!e) return;
   detailId = id;
+  detailOverview.hidden = true;
+  detailEntryActions.hidden = false;
+  detailPreviewActions.hidden = true;
 
   // Cover
   if (e.cover) {
@@ -1818,7 +1942,6 @@ function openDetailSheet(id) {
   }
 
   loadDetailRecs(e);
-  openDetailCard();
 }
 
 /* ---- "More like this" — TMDB recommendations, loaded as the detail
@@ -1847,12 +1970,17 @@ function resetDetailRecs() {
 }
 
 function loadDetailRecs(e) {
-  resetDetailRecs();
   const mediaType = e.type === 'movie' ? 'movie' : e.type === 'series' ? 'tv' : null;
-  if (!mediaType || !e.tmdbId || !settings.tmdbApiKey) return;
+  if (!mediaType || !e.tmdbId) { resetDetailRecs(); return; }
+  startDetailRecs(mediaType, e.tmdbId);
+}
+
+function startDetailRecs(mediaType, tmdbId) {
+  resetDetailRecs();
+  if (!settings.tmdbApiKey) return;
 
   detailRecsMediaType = mediaType;
-  detailRecsTmdbId = e.tmdbId;
+  detailRecsTmdbId = tmdbId;
   detailRecsWrap.hidden = false;
   const token = ++detailRecsToken;
   fetchNextDetailRecsPage(token);
@@ -1924,8 +2052,15 @@ function openDetailCard() {
 
 function closeDetailCard() {
   detailSheet.classList.remove('open');
-  backdrop.classList.remove('visible');
-  document.body.style.overflow = '';
+  // If another sheet (e.g. the person filmography) is still underneath,
+  // keep its backdrop and scroll-lock.
+  const othersOpen = ALL_SHEETS.some((sh) => sh !== detailSheet && !sh.hidden && !sh.classList.contains('closing'));
+  if (!othersOpen) {
+    backdrop.classList.remove('visible');
+    document.body.style.overflow = '';
+  }
+  detailStack = [];
+  detailView = null;
   detailRecsToken++; // cancel any in-flight/pending recs fetch for this sheet
   setTimeout(() => {
     detailSheet.hidden = true;

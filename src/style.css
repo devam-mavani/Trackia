@@ -1408,7 +1408,7 @@ textarea:focus-visible {
   background: var(--glass-fill-strong);
   border: 1px solid var(--glass-edge);
   border-radius: 22px;
-  z-index: 50;
+  z-index: 55; /* above every bottom sheet, so a title card opened from the person/rank sheets isn't hidden behind them */
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2281,3 +2281,15 @@ textarea:focus-visible {
 .rank-pick-item .rank-cover { width: 36px; height: 52px; }
 .rank-pick-add { flex: none; font-size: 0.78rem; font-weight: 700; color: var(--c-accent); }
 .profile-name-btn[hidden] { display: none; }
+
+/* ---------- Title-card navigation (Back) + TMDB preview ---------- */
+.detail-head-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.detail-head-left .icon-btn[hidden] { display: none; }
+.detail-overview {
+  margin: 0 0 16px;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--c-text-dim);
+}
+.detail-overview[hidden] { display: none; }
+#detailPreviewActions .btn-primary { width: 100%; }
