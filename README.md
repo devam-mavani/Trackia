@@ -83,3 +83,24 @@ Download it from the **Actions** tab → the workflow run → **Artifacts**.
   variable overrides. "Reset to default theme" clears the overrides.
 - **Backup** — export the full library as a `.json` file, or import one
   (from Trackia or a compatible export) to merge into the current library.
+
+
+## Home: separate sources
+
+The Home page has a switch at the top — **Movies & TV · Anime · Manga · Books**.
+Each source is fully separate (its own search, discovery rows, detail info and
+"more like this"), and the choice is remembered.
+
+| Source | Data from | Needs a key? |
+|---|---|---|
+| Movies & TV | TMDB (+ OMDb for IMDb ratings) | Free TMDB key, added in Settings |
+| Anime, Manga | AniList | No |
+| Books | Google Books | No (optional key via `VITE_GOOGLE_BOOKS_KEY`) |
+
+AniList allows ~30 requests/minute, so Home rows load lazily as you scroll and
+results are cached for 6 hours.
+
+### Database update (one time)
+Run `supabase/migrations/20260929_anime_manga_books.sql` in the Supabase SQL
+editor. Until then everything still works; only entries added from AniList /
+Google Books can't sync to the cloud.

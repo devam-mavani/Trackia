@@ -4,6 +4,11 @@ import { Share } from '@capacitor/share';
 import { initThemedSelects, syncThemedSelect } from './themedSelect.js';
 import { supabase, COVERS_BUCKET } from './supabaseClient.js';
 import '@fontsource-variable/outfit';
+import {
+  browseMedia, browseBooks, mediaDetails, mediaRecommendations, bookDetails,
+  searchStaff, staffDetails, describeError,
+} from './sources.js';
+import { planRowsFor } from './recommend.js';
 
 /* ---------------------------------------------------------------------- */
 /*  Storage                                                                */
@@ -49,6 +54,7 @@ function loadSettings() {
     theme: { '--c-bg': '', '--c-surface': '', '--c-accent': '', '--c-text': '' },
     tmdbApiKey: '',
     omdbApiKey: '',
+    homeSource: 'tmdb', // Home tab: 'tmdb' | 'anime' | 'manga' | 'books'
   };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -110,13 +116,17 @@ function rowToEntry(row) {
     cover: row.cover || null,
     tmdbId: row.tmdb_id || null,
     genreIds: row.genre_ids || [],
+    anilistId: row.anilist_id ? String(row.anilist_id) : null,
+    gbooksId: row.gbooks_id || null,
+    genres: row.genres || [],
+    authors: row.authors || [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
 function entryToRow(entry, userId) {
-  return {
+  const row = {
     id: entry.id,
     user_id: userId,
     title: entry.title,
@@ -134,6 +144,13 @@ function entryToRow(entry, userId) {
     created_at: entry.createdAt,
     updated_at: entry.updatedAt,
   };
+  // Anime / manga / book fields are only sent when set, so an entry that
+  // doesn't use them still syncs even if the database hasn't been migrated yet.
+  if (entry.anilistId) row.anilist_id = Number(entry.anilistId);
+  if (entry.gbooksId) row.gbooks_id = String(entry.gbooksId);
+  if (entry.genres && entry.genres.length) row.genres = entry.genres;
+  if (entry.authors && entry.authors.length) row.authors = entry.authors;
+  return row;
 }
 
 async function pullEntriesFromCloud() {
@@ -148,7 +165,13 @@ async function pullEntriesFromCloud() {
 async function syncUpsert(entry) {
   if (!currentUserId) return;
   const { error } = await supabase.from('entries').upsert(entryToRow(entry, currentUserId));
-  if (error) queuePending({ op: 'upsert', entry });
+  if (error) {
+    // A missing column means the Supabase migration hasn't been run yet.
+    if (/anilist_id|gbooks_id|genres|authors/.test(error.message || '')) {
+      showToast('Cloud sync needs the database update — see supabase/migrations');
+    }
+    queuePending({ op: 'upsert', entry });
+  }
 }
 
 async function syncDelete(id) {
@@ -237,6 +260,10 @@ const state = {
   draftCover: null,
   draftTmdbId: null,
   draftGenreIds: [],
+  draftAnilistId: null, // set when the entry was imported from AniList
+  draftGbooksId: null,  // set when imported from Google Books
+  draftGenres: [],      // genre names (anime / manga / books)
+  draftAuthors: [],
   draftDescription: '', // last auto-imported TMDB overview, so a re-import can
                          // cleanly replace it instead of piling up duplicates
 };
@@ -922,9 +949,17 @@ async function renderTmdbDiscoveryRows(token) {
 
 function renderHome() {
   const token = ++homeRenderToken;
+  disconnectHomeObservers();
   homeSections.innerHTML = '';
-  const trackable = entries.filter((e) => e.type !== 'list');
-  homeEmptyState.hidden = entries.length !== 0;
+  const source = currentSource();
+  const src = SOURCES[source];
+  // Every source is fully separate: the "your library" rows only show the
+  // types that belong to the selected source.
+  const trackable = entries.filter((e) => src.types.includes(e.type));
+  homeEmptyState.hidden = trackable.length !== 0;
+  homeEmptyState.querySelector('.empty-title').textContent = `No ${src.label.toLowerCase()} yet`;
+  homeEmptyState.querySelector('.empty-sub').textContent =
+    `Search above to add ${src.addHint}, or use the + button to add one manually.`;
 
   const continueWatching = trackable
     .filter((e) => e.status === 'progress')
@@ -948,6 +983,7 @@ function renderHome() {
 
   const goToLibrary = (statusFilter) => () => {
     showPage('library');
+    setTypeFilter(src.types.length === 1 ? src.types[0] : 'all');
     state.statusFilter = statusFilter;
     $('#statusFilter').value = statusFilter;
     syncThemedSelect($('#statusFilter'));
@@ -955,13 +991,18 @@ function renderHome() {
   };
 
   const rows = [
-    renderHRow('Continue watching', continueWatching, { onSeeAll: goToLibrary('progress') }),
+    renderHRow(src.verb === 'reading' ? 'Continue reading' : 'Continue watching', continueWatching, { onSeeAll: goToLibrary('progress') }),
     renderHRow('Recently added', recentlyAdded, { onSeeAll: goToLibrary('all') }),
     renderHRow('Top rated', topRated, { onSeeAll: goToLibrary('all') }),
     renderHRow('Plan to start', planToStart, { onSeeAll: goToLibrary('plan') }),
   ].filter(Boolean);
 
   rows.forEach((row) => homeSections.appendChild(row));
+
+  if (source !== 'tmdb') {
+    renderSourceDiscoveryRows(token, source);
+    return;
+  }
 
   if (!settings.tmdbApiKey) {
     const hint = document.createElement('div');
@@ -1116,7 +1157,7 @@ function renderSearchHits(hits) {
   homeSearchResults.hidden = false;
 }
 
-async function runHomeSearch(query) {
+async function runTmdbSearch(query) {
   const apiKey = settings.tmdbApiKey;
   if (!apiKey) {
     showSearchStatus('Add a free TMDB API key in <button type="button" class="link-btn" id="searchOpenSettingsLink">Settings</button> to search.');
@@ -1170,14 +1211,14 @@ function showPersonStatus(html) {
 // Builds one "Directing" / "Acting" section of a person's filmography as a
 // grid of TMDB cards, reusing the same card + add-to-library flow as the
 // Home page's trending/genre rows.
-function renderCreditsGroup(label, hits) {
+function renderCreditsGroup(label, hits, cardFn = renderTmdbCard) {
   if (!hits.length) return null;
   const group = document.createElement('div');
   group.className = 'person-credits-group';
   group.innerHTML = `<h3>${escapeHtml(label)}</h3>`;
   const grid = document.createElement('div');
   grid.className = 'tmdb-grid';
-  hits.forEach((hit) => grid.appendChild(renderTmdbCard(hit)));
+  hits.forEach((hit) => grid.appendChild(cardFn(hit)));
   group.appendChild(grid);
   return group;
 }
@@ -1276,6 +1317,7 @@ async function openPersonSheet(hit) {
       showPersonStatus('No titles with posters found for this person.');
       return;
     }
+    personStatusEl.hidden = true;
     groups.forEach((g) => personCreditsEl.appendChild(g));
   } catch (err) {
     if (token !== personRequestToken) return;
@@ -1296,7 +1338,8 @@ homeSearchInput.addEventListener('input', () => {
   clearTimeout(homeSearchTimer);
   if (!q) { homeSearchResults.hidden = true; homeSearchResults.innerHTML = ''; return; }
   if (q.length < 2) { showSearchStatus('Keep typing…'); return; }
-  homeSearchTimer = setTimeout(() => runHomeSearch(q), 450);
+  // AniList / Google Books are rate-limited, so give typing a little longer to settle.
+  homeSearchTimer = setTimeout(() => runHomeSearch(q), currentSource() === 'tmdb' ? 450 : 700);
 });
 
 homeSearchInput.addEventListener('focus', () => {
@@ -1863,7 +1906,9 @@ function navigateDetail(view) {
 function showDetailView(view, alreadyOpen) {
   detailView = view;
   detailBackBtn.hidden = detailStack.length === 0;
+  resetDetailRelated();
   if (view.kind === 'entry') renderEntryDetail(view.id);
+  else if (view.hit && view.hit.source) renderSourcePreview(view.hit);
   else renderPreviewDetail(view.hit, view.mediaType);
   if (alreadyOpen) detailScrollEl.scrollTop = 0;
   else openDetailCard();
@@ -2044,8 +2089,14 @@ function renderEntryDetail(id) {
     detailNotesWrap.hidden = true;
   }
 
-  loadDetailRecs(e);
-  showDetailInfo(e.type === 'movie' ? 'movie' : e.type === 'series' ? 'tv' : null, e.tmdbId, e.rating);
+  const ref = entrySourceRef(e);
+  if (ref) {
+    startSourceRecs(ref);
+    showSourceInfo(ref, e.rating);
+  } else {
+    loadDetailRecs(e);
+    showDetailInfo(e.type === 'movie' ? 'movie' : e.type === 'series' ? 'tv' : null, e.tmdbId, e.rating);
+  }
 }
 
 /* ---- "More like this" — TMDB recommendations, loaded as the detail
@@ -2058,8 +2109,8 @@ let detailRecsToken = 0;
 let detailRecsPage = 0;
 let detailRecsLoading = false;
 let detailRecsExhausted = false;
-let detailRecsMediaType = null;
-let detailRecsTmdbId = null;
+let detailRecsProvider = null; // (page) => Promise<{ hits, hasMore }>
+let detailRecsCard = null;     // (hit) => HTMLElement
 const DETAIL_RECS_PAGE_CAP = 5;
 
 function resetDetailRecs() {
@@ -2069,8 +2120,8 @@ function resetDetailRecs() {
   detailRecsPage = 0;
   detailRecsExhausted = false;
   detailRecsLoading = false;
-  detailRecsMediaType = null;
-  detailRecsTmdbId = null;
+  detailRecsProvider = null;
+  detailRecsCard = null;
 }
 
 function loadDetailRecs(e) {
@@ -2079,45 +2130,51 @@ function loadDetailRecs(e) {
   startDetailRecs(mediaType, e.tmdbId);
 }
 
-function startDetailRecs(mediaType, tmdbId) {
+// Starts a "More like this" grid. `provider(page)` resolves to
+// { hits, hasMore } and `cardFn(hit)` builds each card, so TMDB, AniList
+// and Google Books all share the same scrolling / paging behaviour.
+function beginDetailRecs(provider, cardFn) {
   resetDetailRecs();
-  if (!settings.tmdbApiKey) return;
-
-  detailRecsMediaType = mediaType;
-  detailRecsTmdbId = tmdbId;
+  detailRecsProvider = provider;
+  detailRecsCard = cardFn;
   detailRecsWrap.hidden = false;
   const token = ++detailRecsToken;
   fetchNextDetailRecsPage(token);
 }
 
+function startDetailRecs(mediaType, tmdbId) {
+  resetDetailRecs();
+  if (!settings.tmdbApiKey) return;
+  beginDetailRecs(async (page) => {
+    const [url, opts] = tmdbRequest(`/${mediaType}/${tmdbId}/recommendations`, { page: String(page) });
+    const res = await fetchWithTimeout(url, opts, 12000);
+    if (!res.ok) throw new Error('tmdb_recs_failed');
+    const data = await res.json();
+    const results = data.results || [];
+    return {
+      hits: results.filter((r) => r.poster_path).map((r) => ({ ...r, media_type: mediaType })),
+      hasMore: results.length > 0 && !(data.total_pages && page >= data.total_pages),
+    };
+  }, renderTmdbCard);
+}
+
 async function fetchNextDetailRecsPage(token) {
   if (detailRecsLoading || detailRecsExhausted || token !== detailRecsToken) return;
-  if (!detailRecsMediaType || !detailRecsTmdbId) return;
+  if (!detailRecsProvider) return;
 
   detailRecsLoading = true;
   const page = detailRecsPage + 1;
   if (page === 1) { detailRecsStatus.hidden = false; detailRecsStatus.textContent = 'Loading…'; }
 
   try {
-    const [url, opts] = tmdbRequest(`/${detailRecsMediaType}/${detailRecsTmdbId}/recommendations`, { page: String(page) });
-    const res = await fetchWithTimeout(url, opts, 12000);
-    if (token !== detailRecsToken) return;
-    if (!res.ok) {
-      detailRecsExhausted = true;
-      if (page === 1) detailRecsWrap.hidden = true;
-      return;
-    }
-    const data = await res.json();
+    const { hits, hasMore } = await detailRecsProvider(page);
     if (token !== detailRecsToken) return;
 
-    const hits = (data.results || []).filter((r) => r.poster_path);
     detailRecsPage = page;
     if (page === 1 && !hits.length) { detailRecsWrap.hidden = true; return; }
 
-    hits.forEach((hit) => detailRecsGrid.appendChild(renderTmdbCard({ ...hit, media_type: detailRecsMediaType })));
-    if (!data.results?.length || page >= DETAIL_RECS_PAGE_CAP || (data.total_pages && page >= data.total_pages)) {
-      detailRecsExhausted = true;
-    }
+    hits.forEach((hit) => detailRecsGrid.appendChild(detailRecsCard(hit)));
+    if (!hasMore || page >= DETAIL_RECS_PAGE_CAP) detailRecsExhausted = true;
   } catch (err) {
     if (token !== detailRecsToken) return;
     detailRecsExhausted = true;
@@ -2198,6 +2255,692 @@ $('#detailDeleteBtn').addEventListener('click', () => {
   showToast('Entry deleted');
   syncDelete(deletedId);
 });
+
+/* ---------------------------------------------------------------------- */
+/*  Sources — Movies & TV (TMDB) · Anime + Manga (AniList) · Books        */
+/*                                                                        */
+/*  Every source is fully separate: its own search, its own discovery     */
+/*  rows, its own detail info and its own "more like this". The switch at */
+/*  the top of Home picks the active one and is remembered between runs.  */
+/*  TMDB keeps its original code path; the others share the helpers here. */
+/* ---------------------------------------------------------------------- */
+
+const SOURCES = {
+  tmdb: {
+    label: 'Movies & TV', types: ['movie', 'series'], verb: 'watching',
+    placeholder: 'Search movies, shows, actors, directors…', addHint: 'a movie or show',
+  },
+  anime: {
+    label: 'Anime', types: ['anime'], verb: 'watching', anilist: 'ANIME',
+    placeholder: 'Search anime, directors, voice actors…', addHint: 'an anime',
+  },
+  manga: {
+    label: 'Manga', types: ['manga'], verb: 'reading', anilist: 'MANGA',
+    placeholder: 'Search manga, manhwa, manhua, authors…', addHint: 'a manga',
+  },
+  books: {
+    label: 'Books', types: ['book'], verb: 'reading',
+    placeholder: 'Search books or authors…', addHint: 'a book',
+  },
+};
+
+function currentSource() {
+  return SOURCES[settings.homeSource] ? settings.homeSource : 'tmdb';
+}
+
+const KIND_LABEL = { anime: 'Anime', manga: 'Manga', manhwa: 'Manhwa', manhua: 'Manhua', book: 'Book' };
+const FORMAT_LABEL = {
+  TV: 'TV', TV_SHORT: 'TV short', MOVIE: 'Movie', OVA: 'OVA', ONA: 'ONA', SPECIAL: 'Special',
+  MUSIC: 'Music', MANGA: 'Manga', ONE_SHOT: 'One-shot', NOVEL: 'Light novel',
+};
+const RELATION_LABEL = {
+  PREQUEL: 'Prequel', SEQUEL: 'Sequel', PARENT: 'Parent story', SIDE_STORY: 'Side story',
+  SPIN_OFF: 'Spin-off', ALTERNATIVE: 'Alternative', ADAPTATION: 'Adaptation', SOURCE: 'Source',
+  SUMMARY: 'Summary', CHARACTER: 'Shared characters', OTHER: 'Related',
+};
+const RELATION_ORDER = Object.keys(RELATION_LABEL);
+
+const anilistTypeOf = (kind) => (kind === 'anime' ? 'ANIME' : 'MANGA');
+const entryTypeForKind = (kind) => (kind === 'anime' ? 'anime' : kind === 'book' ? 'book' : 'manga');
+const capWord = (w) => (w ? w[0] + w.slice(1).toLowerCase() : '');
+
+// The library entry (if any) that this AniList / Google Books result already is.
+function findOwned(hit) {
+  const id = String(hit.id);
+  if (hit.source === 'anilist') return entries.find((e) => e.anilistId && String(e.anilistId) === id);
+  if (hit.source === 'gbooks') return entries.find((e) => e.gbooksId && String(e.gbooksId) === id);
+  return null;
+}
+
+// Which external record an existing entry is linked to (null if none —
+// e.g. entries added by hand, which simply keep the plain detail view).
+function entrySourceRef(e) {
+  if (e.anilistId && (e.type === 'anime' || e.type === 'manga')) {
+    return { source: 'anilist', id: e.anilistId, kind: e.type, genres: e.genres || [], authors: [] };
+  }
+  if (e.gbooksId && e.type === 'book') {
+    return { source: 'gbooks', id: e.gbooksId, kind: 'book', genres: e.genres || [], authors: e.authors || [] };
+  }
+  return null;
+}
+
+/* ---- Cards ---- */
+
+function renderSourceCard(hit, opts = {}) {
+  const owned = findOwned(hit);
+  const card = document.createElement('article');
+  card.className = 'hcard';
+
+  const cover = document.createElement('div');
+  cover.className = 'hcard-cover';
+  const addInitial = () => {
+    cover.style.background = colorForString(hit.title);
+    const span = document.createElement('span');
+    span.className = 'initial';
+    span.textContent = initials(hit.title);
+    cover.insertBefore(span, cover.firstChild);
+  };
+  if (hit.cover) {
+    const img = document.createElement('img');
+    img.src = hit.cover;
+    img.alt = hit.title;
+    img.loading = 'lazy';
+    img.addEventListener('error', () => { img.remove(); addInitial(); });
+    cover.appendChild(img);
+  } else {
+    addInitial();
+  }
+
+  if (owned || hit.score) {
+    const badge = document.createElement('span');
+    badge.className = 'hcard-rating';
+    badge.textContent = owned ? 'In list' : `★ ${hit.score.toFixed(1)}`;
+    cover.appendChild(badge);
+  }
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'hcard-title';
+  titleEl.textContent = hit.title;
+
+  const sub = document.createElement('div');
+  sub.className = 'hcard-sub';
+  sub.textContent = opts.sub || [KIND_LABEL[hit.kind], hit.year].filter(Boolean).join(' · ');
+
+  card.append(cover, titleEl, sub);
+  card.addEventListener('click', () => {
+    if (owned) openDetailSheet(owned.id);
+    else openSourcePreview(hit);
+  });
+  return card;
+}
+
+/* ---- Home discovery rows (lazy: a row only loads when scrolled near, so
+   AniList's ~30 requests/minute limit isn't spent on rows nobody reaches) ---- */
+
+let homeObservers = [];
+function disconnectHomeObservers() {
+  homeObservers.forEach((o) => o.disconnect());
+  homeObservers = [];
+}
+
+const LAZY_ROW_CAP = 16;
+const MIN_FULL_PAGE = 8; // pages can come back a little short after filtering
+
+function renderSourceDiscoveryRows(token, source) {
+  planRowsFor(source, entries)
+    .slice(0, LAZY_ROW_CAP)
+    .forEach((plan) => homeSections.appendChild(createLazyRow(plan, token)));
+}
+
+function fillPagedRow(scroll, first, fetchPage) {
+  first.forEach((hit) => scroll.appendChild(renderSourceCard(hit)));
+  let page = 1;
+  let moreCard = null;
+  const attach = () => {
+    if (page >= ROW_PAGE_CAP) return;
+    moreCard = makeLoadMoreCard(async () => {
+      let next;
+      try {
+        next = await fetchPage(page + 1);
+      } catch (err) {
+        showToast(`Couldn't load more — ${describeError(err)}`);
+        return;
+      }
+      page += 1;
+      moreCard.remove();
+      moreCard = null;
+      next.forEach((hit) => scroll.appendChild(renderSourceCard(hit)));
+      if (next.length >= MIN_FULL_PAGE) attach();
+    });
+    scroll.appendChild(moreCard);
+  };
+  if (first.length >= MIN_FULL_PAGE) attach();
+}
+
+function createLazyRow(plan, token) {
+  const section = document.createElement('section');
+  section.className = 'hrow';
+  const head = document.createElement('div');
+  head.className = 'hrow-head';
+  head.innerHTML = `<h2>${escapeHtml(plan.title)}</h2>`;
+  const scroll = document.createElement('div');
+  scroll.className = 'hscroll';
+  section.append(head, scroll);
+
+  const showSkeleton = () => {
+    scroll.innerHTML = Array.from({ length: 6 }, () =>
+      '<div class="hcard hcard-skel"><div class="hcard-cover"></div><div class="skel-line"></div></div>').join('');
+  };
+  showSkeleton();
+
+  const load = async () => {
+    showSkeleton();
+    try {
+      const first = await plan.fetchPage(1);
+      if (token !== homeRenderToken) return;
+      if (!first.length) { section.remove(); return; }
+      scroll.innerHTML = '';
+      fillPagedRow(scroll, first, plan.fetchPage);
+    } catch (err) {
+      if (token !== homeRenderToken) return;
+      scroll.innerHTML = `<div class="hrow-error">Couldn't load this row — ${escapeHtml(describeError(err))}. <button type="button" class="link-btn">Retry</button></div>`;
+      scroll.querySelector('button').addEventListener('click', load);
+    }
+  };
+
+  if (typeof IntersectionObserver === 'undefined') { load(); return section; }
+  let started = false;
+  const io = new IntersectionObserver((list) => {
+    if (started || !list.some((x) => x.isIntersecting)) return;
+    started = true;
+    io.disconnect();
+    load();
+  }, { rootMargin: '600px 0px' });
+  io.observe(section);
+  homeObservers.push(io);
+  return section;
+}
+
+/* ---- Home search (AniList / Google Books) ---- */
+
+function renderSourceHit(hit) {
+  const owned = findOwned(hit);
+  const row = document.createElement('div');
+  row.className = 'search-hit';
+
+  const cover = document.createElement('div');
+  cover.className = 'search-hit-cover';
+  if (hit.cover) {
+    const img = document.createElement('img');
+    img.src = hit.cover;
+    img.alt = '';
+    cover.appendChild(img);
+  } else {
+    cover.style.background = colorForString(hit.title);
+    const span = document.createElement('span');
+    span.className = 'initial';
+    span.textContent = initials(hit.title);
+    cover.appendChild(span);
+  }
+
+  const info = document.createElement('div');
+  info.className = 'search-hit-info';
+  const meta = [hit.year, KIND_LABEL[hit.kind], hit.authors && hit.authors[0]].filter(Boolean).join(' · ');
+  info.innerHTML = `
+    <div class="search-hit-title">${escapeHtml(hit.title)}</div>
+    <div class="search-hit-meta">${escapeHtml(meta)}</div>
+  `;
+
+  const tag = document.createElement('span');
+  tag.className = 'search-hit-tag';
+  tag.textContent = owned ? 'In list' : '+ Add';
+
+  row.append(cover, info, tag);
+  row.addEventListener('click', () => {
+    homeSearchResults.hidden = true;
+    homeSearchInput.blur();
+    if (owned) openDetailSheet(owned.id);
+    else openSourcePreview(hit);
+  });
+  return row;
+}
+
+function renderStaffHit(person, anilistType) {
+  const row = document.createElement('div');
+  row.className = 'search-hit';
+
+  const cover = document.createElement('div');
+  cover.className = 'search-hit-cover person-cover';
+  if (person.image) {
+    const img = document.createElement('img');
+    img.src = person.image;
+    img.alt = '';
+    cover.appendChild(img);
+  } else {
+    cover.style.background = colorForString(person.name);
+    const span = document.createElement('span');
+    span.className = 'initial';
+    span.textContent = initials(person.name);
+    cover.appendChild(span);
+  }
+
+  const info = document.createElement('div');
+  info.className = 'search-hit-info';
+  info.innerHTML = `
+    <div class="search-hit-title">${escapeHtml(person.name)}</div>
+    <div class="search-hit-meta person-meta-line">${escapeHtml(person.occupations.slice(0, 2).join(' · ') || 'Person')}</div>
+  `;
+
+  const tag = document.createElement('span');
+  tag.className = 'search-hit-tag person-tag';
+  tag.innerHTML = '<svg viewBox="0 0 24 24"><path d="M8.6 5.4L15.2 12l-6.6 6.6-1.4-1.4L12.4 12 7.2 6.8z"/></svg>';
+
+  row.append(cover, info, tag);
+  row.addEventListener('click', () => {
+    homeSearchResults.hidden = true;
+    homeSearchInput.blur();
+    openStaffSheet(person, anilistType);
+  });
+  return row;
+}
+
+function renderSourceHits(titles) {
+  homeSearchResults.innerHTML = '';
+  if (!titles.length) {
+    showSearchStatus('No matches — try a different title.');
+    return;
+  }
+  titles.forEach((hit) => homeSearchResults.appendChild(renderSourceHit(hit)));
+  homeSearchResults.hidden = false;
+}
+
+// People arrive after the titles so a slow second request never holds the
+// results back; they're dropped if the search has moved on meanwhile.
+function appendStaffHits(people, anilistType, token) {
+  if (token !== homeSearchToken || !people.length) return;
+  const status = homeSearchResults.querySelector('.search-status-msg');
+  if (status) status.remove();
+  people.forEach((p) => homeSearchResults.appendChild(renderStaffHit(p, anilistType)));
+  homeSearchResults.hidden = false;
+}
+
+async function runSourceSearch(query, source) {
+  const token = ++homeSearchToken;
+  showSearchStatus('Searching…');
+  try {
+    if (source === 'books') {
+      const hits = await browseBooks({ q: query, perPage: 15, requireCover: false, priority: true });
+      if (token !== homeSearchToken) return;
+      renderSourceHits(hits);
+      return;
+    }
+    const type = SOURCES[source].anilist;
+    const titles = await browseMedia({ type, search: query, sort: 'SEARCH_MATCH', perPage: 12, priority: true });
+    if (token !== homeSearchToken) return;
+    renderSourceHits(titles);
+    // AniList's people search is fuzzy — only keep names that share a word with the query.
+    const words = query.toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
+    searchStaff(query, 4)
+      .then((people) => appendStaffHits(
+        people.filter((p) => words.some((w) => p.name.toLowerCase().includes(w))), type, token))
+      .catch(() => { /* the titles are already showing */ });
+  } catch (err) {
+    if (token !== homeSearchToken) return;
+    showSearchStatus(`Couldn't search — ${escapeHtml(describeError(err))}.`);
+  }
+}
+
+function runHomeSearch(query) {
+  const source = currentSource();
+  return source === 'tmdb' ? runTmdbSearch(query) : runSourceSearch(query, source);
+}
+
+/* ---- The switch itself ---- */
+
+const homeSourceTabs = $('#homeSourceTabs');
+
+function applyHomeSource() {
+  const source = currentSource();
+  homeSourceTabs.querySelectorAll('.source-tab').forEach((b) => b.classList.toggle('active', b.dataset.source === source));
+  homeSearchInput.placeholder = SOURCES[source].placeholder;
+}
+
+homeSourceTabs.addEventListener('click', (e) => {
+  const btn = e.target.closest('.source-tab');
+  if (!btn || btn.dataset.source === currentSource()) return;
+  settings.homeSource = btn.dataset.source;
+  saveSettings(settings);
+  applyHomeSource();
+  btn.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+
+  // Drop whatever search was in flight; if there's still a query typed,
+  // run it again against the newly selected source.
+  homeSearchToken++;
+  const q = homeSearchInput.value.trim();
+  if (q.length >= 2) runHomeSearch(q);
+  else { homeSearchResults.hidden = true; homeSearchResults.innerHTML = ''; }
+  renderHome();
+});
+applyHomeSource();
+
+/* ---- Title card: preview + details ---- */
+
+function openSourcePreview(hit) {
+  const owned = findOwned(hit);
+  if (owned) { openDetailSheet(owned.id); return; }
+  navigateDetail({ kind: 'preview', hit, mediaType: hit.kind });
+}
+
+function paintDetailCover(url, title) {
+  if (url) {
+    detailCoverImg.src = url;
+    detailCoverImg.hidden = false;
+    detailCoverInitial.hidden = true;
+    detailCoverImg.onerror = () => { detailCoverImg.hidden = true; detailCoverInitial.hidden = false; };
+  } else {
+    detailCoverImg.hidden = true;
+    detailCoverImg.src = '';
+    detailCoverInitial.hidden = false;
+  }
+  detailCoverInitial.textContent = initials(title);
+  detailCover.style.background = url ? 'transparent' : colorForString(title);
+  detailCover.hidden = false;
+}
+
+function sourceMetaLine(d) {
+  const bits = [];
+  if (d.year) bits.push(String(d.year));
+  if (d.kind === 'book') {
+    if (d.authors && d.authors.length) bits.push(d.authors.slice(0, 2).join(', '));
+    if (d.total) bits.push(`${d.total} pages`);
+  } else {
+    if (d.format) bits.push(FORMAT_LABEL[d.format] || d.format);
+    if (d.total) {
+      const unit = d.kind === 'anime' ? 'episode' : 'chapter';
+      bits.push(`${d.total} ${unit}${d.total === 1 ? '' : 's'}`);
+    }
+  }
+  return bits.join(' · ');
+}
+
+function renderSourcePreview(hit) {
+  detailId = null;
+  paintDetailCover(hit.cover, hit.title);
+
+  detailBadges.innerHTML = `
+    <span class="badge badge-type">${escapeHtml(KIND_LABEL[hit.kind] || hit.kind)}</span>
+    <span class="badge badge-status">Not in your list</span>
+    ${hit.score ? `<span class="badge badge-rating">★ ${hit.score.toFixed(1)}</span>` : ''}
+  `;
+  detailTitle.textContent = hit.title;
+
+  const meta = sourceMetaLine(hit);
+  detailMeta.textContent = meta;
+  detailMeta.hidden = !meta;
+
+  detailOverview.textContent = hit.description || '';
+  detailOverview.hidden = !hit.description;
+
+  detailProgressWrap.hidden = true;
+  detailTags.hidden = true;
+  detailNotesWrap.hidden = true;
+  detailEntryActions.hidden = true;
+  detailPreviewActions.hidden = false;
+
+  $('#detailAddBtn').onclick = () => {
+    closeDetailCard();
+    if (!personSheet.hidden) closeSheet(personSheet);
+    openEntrySheetFromSource(hit);
+  };
+
+  startSourceRecs(hit);
+  // Fill in the full description, length, studio, related titles, etc.
+  showSourceInfo(hit, 0, (d) => {
+    if (!detailView || detailView.hit !== hit) return;
+    const merged = sourceMetaLine({ ...hit, ...d, authors: d.authors && d.authors.length ? d.authors : hit.authors });
+    if (merged) { detailMeta.textContent = merged; detailMeta.hidden = false; }
+    if (d.description) { detailOverview.textContent = d.description; detailOverview.hidden = false; }
+  });
+}
+
+const detailRelated = $('#detailRelated');
+const detailRelatedRow = $('#detailRelatedRow');
+
+function resetDetailRelated() {
+  detailRelated.hidden = true;
+  detailRelatedRow.innerHTML = '';
+}
+
+function paintDetailRelated(d) {
+  const seen = new Set();
+  const list = (d.related || [])
+    .filter((r) => r.hit.cover && !seen.has(r.hit.id) && seen.add(r.hit.id))
+    .sort((a, b) => RELATION_ORDER.indexOf(a.relation) - RELATION_ORDER.indexOf(b.relation))
+    .slice(0, 14);
+  detailRelatedRow.innerHTML = '';
+  if (!list.length) { detailRelated.hidden = true; return; }
+  list.forEach((r) => detailRelatedRow.appendChild(renderSourceCard(r.hit, { sub: RELATION_LABEL[r.relation] || 'Related' })));
+  detailRelated.hidden = false;
+}
+
+const fmtDay = (ms) => new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+function statusText(d) {
+  return ({
+    FINISHED: 'Finished',
+    RELEASING: d.kind === 'anime' ? 'Airing' : 'Publishing',
+    NOT_YET_RELEASED: 'Not yet released',
+    CANCELLED: 'Cancelled',
+    HIATUS: 'On hiatus',
+  })[d.status] || '';
+}
+
+function paintSourceInfo(d, myRating) {
+  const chips = [];
+  if (myRating) chips.push(`<div class="rate-chip you"><b>★ ${myRating}</b><span>You</span></div>`);
+  if (d.score) {
+    if (d.source === 'anilist' && d.siteUrl) {
+      chips.push(`<a class="rate-chip anilist" href="${escapeHtml(d.siteUrl)}" target="_blank" rel="noopener"><b>${d.score.toFixed(1)}</b><span>AniList</span></a>`);
+    } else {
+      chips.push(`<div class="rate-chip"><b>${d.score.toFixed(1)}</b><span>${d.source === 'gbooks' ? 'Google Books' : 'Score'}</span></div>`);
+    }
+  }
+
+  const facts = [];
+  const add = (label, value) => { if (value) facts.push(`<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`); };
+
+  if (d.source === 'anilist') {
+    const isAnime = d.kind === 'anime';
+    add('Format', FORMAT_LABEL[d.format] || '');
+    const len = [];
+    if (isAnime) {
+      if (d.total) len.push(`${d.total} ep${d.total === 1 ? '' : 's'}`);
+      if (d.duration) len.push(`${d.duration} min`);
+    } else {
+      if (d.total) len.push(`${d.total} chapters`);
+      if (d.volumes) len.push(`${d.volumes} volumes`);
+    }
+    add('Length', len.join(' · '));
+    if (isAnime) {
+      add('Season', d.season && d.seasonYear ? `${capWord(d.season)} ${d.seasonYear}` : '');
+      add('Studio', (d.studios || []).join(', '));
+    } else if (d.year) {
+      add('Published', d.endYear && d.endYear !== d.year ? `${d.year}–${d.endYear}` : d.status === 'RELEASING' ? `${d.year}–present` : String(d.year));
+    }
+    const status = statusText(d);
+    add('Status', d.nextEpisode ? `${status} · Ep ${d.nextEpisode.episode} on ${fmtDay(d.nextEpisode.airingAt)}` : status);
+    const keyRoles = isAnime ? /^(director|original creator|original story|series composition)/i : /^(story|art|original)/i;
+    const people = (d.staff || []).filter((p) => keyRoles.test(p.role)).slice(0, 4).map((p) => `${p.name} (${p.role})`);
+    add(isAnime ? 'Staff' : 'Author', people.join(', '));
+    add('Genres', (d.genres || []).slice(0, 5).join(', '));
+    if (d.trailerUrl) facts.push(`<dt>Trailer</dt><dd><a href="${escapeHtml(d.trailerUrl)}" target="_blank" rel="noopener">Watch trailer</a></dd>`);
+  } else {
+    const authors = d.authors || [];
+    add(authors.length > 1 ? 'Authors' : 'Author', authors.join(', '));
+    add('Publisher', d.publisher);
+    add('Published', d.published);
+    add('Pages', d.total ? String(d.total) : '');
+    add('Genres', (d.genres || []).slice(0, 5).join(', '));
+  }
+
+  detailInfo.innerHTML =
+    (chips.length ? `<div class="detail-ratings">${chips.join('')}</div>` : '') +
+    (facts.length ? `<dl class="detail-facts">${facts.join('')}</dl>` : '');
+  detailInfo.hidden = !detailInfo.innerHTML;
+}
+
+// Loads the rich info block (+ related titles) for an AniList / Google Books
+// record. `onDetails(d)` lets the caller reuse the fetched data.
+async function showSourceInfo(ref, myRating, onDetails) {
+  const token = ++detailInfoToken;
+  detailInfo.hidden = true;
+  detailInfo.innerHTML = '';
+  try {
+    const d = ref.source === 'anilist'
+      ? await mediaDetails(ref.id, anilistTypeOf(ref.kind))
+      : await bookDetails(ref.id);
+    if (!d || token !== detailInfoToken) return;
+    paintSourceInfo(d, myRating);
+    paintDetailRelated(d);
+    if (onDetails) onDetails(d);
+  } catch { /* the basic card is already showing */ }
+}
+
+// "More like this": AniList's community recommendations for anime / manga;
+// for books (Google Books has no such API) more from the same author, then
+// the same top genre.
+function startSourceRecs(ref) {
+  resetDetailRecs();
+  if (ref.source === 'anilist') {
+    const type = anilistTypeOf(ref.kind);
+    beginDetailRecs(async (page) => {
+      const hits = await mediaRecommendations(ref.id, type, page, 20);
+      return { hits: hits.filter((h) => h.cover), hasMore: hits.length >= 20 };
+    }, (hit) => renderSourceCard(hit));
+    return;
+  }
+  const queries = [];
+  if (ref.authors && ref.authors[0]) queries.push({ author: ref.authors[0] });
+  if (ref.genres && ref.genres[0]) queries.push({ subject: ref.genres[0] });
+  if (!queries.length) return;
+  beginDetailRecs(async (page) => {
+    const q = queries[page - 1];
+    if (!q) return { hits: [], hasMore: false };
+    const hits = (await browseBooks({ ...q, perPage: 20 })).filter((b) => String(b.id) !== String(ref.id));
+    return { hits, hasMore: page < queries.length };
+  }, (hit) => renderSourceCard(hit));
+}
+
+/* ---- Add to library: fill the entry form from an AniList / Google Books result ---- */
+
+async function importSourceHit(hit) {
+  const importedId = String(hit.id);
+  f_title.value = hit.title || '';
+  f_type.value = entryTypeForKind(hit.kind);
+  updateUnitLabels();
+  syncThemedSelect(f_type);
+
+  state.draftAnilistId = hit.source === 'anilist' ? importedId : null;
+  state.draftGbooksId = hit.source === 'gbooks' ? importedId : null;
+  state.draftGenres = (hit.genres || []).slice();
+  state.draftAuthors = (hit.authors || []).slice();
+
+  // Episodes / chapters / pages straight into "Total", which TMDB never offered.
+  if (hit.total) f_total.value = String(hit.total);
+  if (hit.description) applyDescriptionToNotes(hit.description);
+
+  const tags = [];
+  if (hit.kind === 'manhwa' || hit.kind === 'manhua') tags.push(hit.kind);
+  tags.push(...(hit.genres || []));
+  if (hit.kind === 'book') tags.push(...(hit.authors || []).slice(0, 2));
+  addGenresToTags(tags);
+
+  if (hit.cover) {
+    try {
+      const imgRes = await fetchWithTimeout(hit.cover, undefined, 12000);
+      if (!imgRes.ok) throw new Error('bad_image');
+      const blob = await imgRes.blob();
+      const dataUrl = await optimizeCoverImage(blob).catch(() => blobToDataUrl(blob));
+      setCoverPreview(dataUrl, hit.title);
+    } catch {
+      // Some hosts don't allow embedding the image; the link still works online.
+      setCoverPreview(hit.cover, hit.title);
+    }
+  }
+
+  // Best-effort upgrade to the full description / final episode count.
+  try {
+    const d = hit.source === 'anilist'
+      ? await mediaDetails(hit.id, anilistTypeOf(hit.kind))
+      : await bookDetails(hit.id);
+    if (!d) return;
+    if ((state.draftAnilistId || state.draftGbooksId) !== importedId) return; // form moved on
+    if (d.description) applyDescriptionToNotes(d.description);
+    if (!f_total.value && d.total) f_total.value = String(d.total);
+    if (d.genres && d.genres.length) {
+      state.draftGenres = d.genres.slice();
+      addGenresToTags(d.genres);
+    }
+  } catch (err) {
+    console.error('Detail fetch failed:', err);
+  }
+}
+
+async function openEntrySheetFromSource(hit) {
+  openEntrySheet(null);
+  const name = hit.source === 'anilist' ? 'AniList' : 'Google Books';
+  showToast(`Importing from ${name}…`);
+  try {
+    await importSourceHit(hit);
+    showToast('Imported — review and save');
+  } catch (err) {
+    console.error(`${name} import failed:`, err);
+    showToast(`Couldn't reach ${name} — check your connection`);
+  }
+}
+
+/* ---- Person sheet for AniList staff (directors, mangaka, voice actors) ---- */
+
+async function openStaffSheet(person, anilistType) {
+  const token = ++personRequestToken;
+  personNameEl.textContent = person.name;
+  personDeptEl.textContent = person.occupations.slice(0, 2).join(' · ');
+  personBioEl.hidden = true;
+  personBioEl.textContent = '';
+  personCreditsEl.innerHTML = '';
+  personStatusEl.hidden = true;
+
+  if (person.image) {
+    personPhotoImg.src = person.image;
+    personPhotoImg.hidden = false;
+    personPhotoInitial.hidden = true;
+    personPhoto.style.background = 'transparent';
+  } else {
+    personPhotoImg.hidden = true;
+    personPhotoInitial.hidden = false;
+    personPhotoInitial.textContent = initials(person.name);
+    personPhoto.style.background = colorForString(person.name);
+  }
+
+  openSheet(personSheet);
+  showPersonStatus('Loading credits…');
+  try {
+    const d = await staffDetails(person.id, anilistType);
+    if (token !== personRequestToken) return;
+    if (!d) { showPersonStatus('No details found for this person.'); return; }
+    if (d.bio) { personBioEl.textContent = d.bio; personBioEl.hidden = false; }
+    const groups = [
+      renderCreditsGroup(anilistType === 'ANIME' ? 'Staff credits' : 'Works', d.credits, renderSourceCard),
+      renderCreditsGroup('Voice acting', d.voice, renderSourceCard),
+    ].filter(Boolean);
+    if (!groups.length) { showPersonStatus('No credits found for this person.'); return; }
+    personStatusEl.hidden = true;
+    groups.forEach((g) => personCreditsEl.appendChild(g));
+  } catch (err) {
+    if (token !== personRequestToken) return;
+    showPersonStatus(`Couldn't load credits — ${escapeHtml(describeError(err))}.`);
+  }
+}
 
 /* ---------------------------------------------------------------------- */
 /*  Sheets: generic open/close with swipe-to-close                         */
@@ -2921,6 +3664,10 @@ function resetForm() {
   state.editingId = null;
   state.draftTmdbId = null;
   state.draftGenreIds = [];
+  state.draftAnilistId = null;
+  state.draftGbooksId = null;
+  state.draftGenres = [];
+  state.draftAuthors = [];
   state.draftDescription = '';
   imdbLinkInput.value = '';
   coverLinkRow.hidden = true;
@@ -2963,6 +3710,10 @@ function openEntrySheet(id) {
       state.draftTags = [...(e.tags || [])];
       state.draftTmdbId = e.tmdbId || null;
       state.draftGenreIds = e.genreIds || [];
+      state.draftAnilistId = e.anilistId || null;
+      state.draftGbooksId = e.gbooksId || null;
+      state.draftGenres = [...(e.genres || [])];
+      state.draftAuthors = [...(e.authors || [])];
       // Not tracked from a re-opened entry: a re-import here will simply
       // prepend the fresh description ahead of the existing notes rather
       // than trying to swap out a block we didn't insert this session.
@@ -3010,6 +3761,10 @@ form.addEventListener('submit', (e) => {
     cover: state.draftCover,
     tmdbId: state.draftTmdbId,
     genreIds: state.draftGenreIds.slice(),
+    anilistId: state.draftAnilistId,
+    gbooksId: state.draftGbooksId,
+    genres: state.draftGenres.slice(),
+    authors: state.draftAuthors.slice(),
     updatedAt: Date.now(),
   };
 
@@ -3266,6 +4021,10 @@ $('#importFile').addEventListener('change', async (e) => {
         cover: raw.cover || null,
         tmdbId: raw.tmdbId || null,
         genreIds: Array.isArray(raw.genreIds) ? raw.genreIds : [],
+        anilistId: raw.anilistId ? String(raw.anilistId) : null,
+        gbooksId: raw.gbooksId ? String(raw.gbooksId) : null,
+        genres: Array.isArray(raw.genres) ? raw.genres : [],
+        authors: Array.isArray(raw.authors) ? raw.authors : [],
         createdAt: raw.createdAt || Date.now(),
         updatedAt: raw.updatedAt || Date.now(),
       });

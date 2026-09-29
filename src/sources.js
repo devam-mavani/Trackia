@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------- */
-/*  Data sources: AniList (manga / manhwa / manhua) + Google Books         */
+/*  Data sources: AniList (anime / manga / manhwa / manhua) + Google Books */
 /*  No DOM in here — just fetch + normalise into one common "hit" shape:   */
 /*  { source, id, title, cover, year, score (0-10), kind, total,           */
 /*    genres[], authors[], description }                                   */
@@ -53,7 +53,8 @@ function cached(key, loader) {
   if (inflight.has(key)) return inflight.get(key);
   const p = loader()
     .then((value) => {
-      if (Array.isArray(value) && value.length) { mem.set(key, { at: Date.now(), value }); persist(); }
+      const worthKeeping = Array.isArray(value) ? value.length > 0 : !!value;
+      if (worthKeeping) { mem.set(key, { at: Date.now(), value }); persist(); }
       return value;
     })
     .finally(() => inflight.delete(key));
@@ -152,19 +153,24 @@ const KIND_BY_COUNTRY = { JP: 'manga', KR: 'manhwa', CN: 'manhua', TW: 'manhua' 
 
 const MEDIA_FIELDS = `
   id
+  type
+  format
   title { romaji english }
   coverImage { large }
   averageScore
+  episodes
   chapters
   volumes
   status
   genres
   countryOfOrigin
+  isAdult
   startDate { year }
   description(asHtml: false)
 `;
 
 function normalizeAniList(m) {
+  const isAnime = m.type === 'ANIME';
   return {
     source: 'anilist',
     id: m.id,
@@ -172,8 +178,9 @@ function normalizeAniList(m) {
     cover: m.coverImage?.large || null,
     year: m.startDate?.year || null,
     score: m.averageScore ? m.averageScore / 10 : null,
-    kind: KIND_BY_COUNTRY[m.countryOfOrigin] || 'manga',
-    total: m.chapters || null,
+    kind: isAnime ? 'anime' : (KIND_BY_COUNTRY[m.countryOfOrigin] || 'manga'),
+    format: m.format || null,
+    total: (isAnime ? m.episodes : m.chapters) || null,
     status: m.status,
     genres: m.genres || [],
     authors: [],
@@ -201,13 +208,22 @@ export function pingAniList() {
   return anilist('query { Media(id: 30013, type: MANGA) { id } }', {}, true);
 }
 
+const ANIME_FORMATS = ['TV', 'TV_SHORT', 'MOVIE', 'OVA', 'ONA'];
+const MANGA_FORMATS = ['MANGA', 'ONE_SHOT'];
+
 /**
- * Browse / search manga, manhwa and manhua.
- * opts: { page, perPage, search, sort, genre, country, status, popMin, popMax, priority }
+ * Browse / search AniList anime or manga (incl. manhwa / manhua).
+ * opts: { type ('ANIME'|'MANGA'), page, perPage, search, sort, genre, country,
+ *         status, popMin, popMax, season, seasonYear, format[], priority }
  */
-export function browseManga(opts = {}) {
-  const { page = 1, perPage = 20, search, sort = 'POPULARITY_DESC', genre, country, status, popMin, popMax, priority } = opts;
+export function browseMedia(opts = {}) {
+  const {
+    type = 'MANGA', page = 1, perPage = 20, search, sort = 'POPULARITY_DESC', genre, country,
+    status, popMin, popMax, season, seasonYear, format, priority,
+  } = opts;
   const variables = {
+    type,
+    formats: format || (type === 'ANIME' ? ANIME_FORMATS : MANGA_FORMATS),
     page, perPage,
     search: search || undefined,
     sort: [sort],
@@ -216,39 +232,173 @@ export function browseManga(opts = {}) {
     status: status || undefined,
     popMin: popMin || undefined,
     popMax: popMax || undefined,
+    season: season || undefined,
+    seasonYear: seasonYear || undefined,
   };
   const query = `
-    query ($page: Int, $perPage: Int, $search: String, $sort: [MediaSort], $genre: String,
-           $country: CountryCode, $status: MediaStatus, $popMin: Int, $popMax: Int) {
+    query ($type: MediaType, $formats: [MediaFormat], $page: Int, $perPage: Int, $search: String,
+           $sort: [MediaSort], $genre: String, $country: CountryCode, $status: MediaStatus,
+           $popMin: Int, $popMax: Int, $season: MediaSeason, $seasonYear: Int) {
       Page(page: $page, perPage: $perPage) {
-        media(type: MANGA, format_in: [MANGA, ONE_SHOT], isAdult: false, search: $search, sort: $sort,
+        media(type: $type, format_in: $formats, isAdult: false, search: $search, sort: $sort,
               genre: $genre, countryOfOrigin: $country, status: $status,
-              popularity_greater: $popMin, popularity_lesser: $popMax) {
+              popularity_greater: $popMin, popularity_lesser: $popMax,
+              season: $season, seasonYear: $seasonYear) {
           ${MEDIA_FIELDS}
         }
       }
     }`;
   return cached(`al:${JSON.stringify(variables)}`, async () => {
     const data = await anilist(query, variables, priority);
-    return (data.Page?.media || []).map(normalizeAniList);
+    return (data.Page?.media || []).filter((m) => !m.isAdult).map(normalizeAniList);
   });
 }
 
+export const browseManga = (opts = {}) => browseMedia({ ...opts, type: 'MANGA' });
+export const browseAnime = (opts = {}) => browseMedia({ ...opts, type: 'ANIME' });
+
 /** Community recommendations for one AniList title ("because you liked X"). */
-export function mangaRecommendations(anilistId, page = 1, perPage = 20) {
+export function mediaRecommendations(anilistId, type = 'MANGA', page = 1, perPage = 20) {
   const query = `
-    query ($id: Int, $page: Int, $perPage: Int) {
-      Media(id: $id, type: MANGA) {
+    query ($id: Int, $type: MediaType, $page: Int, $perPage: Int) {
+      Media(id: $id, type: $type) {
         recommendations(page: $page, perPage: $perPage, sort: RATING_DESC) {
-          nodes { rating mediaRecommendation { ${MEDIA_FIELDS} isAdult } }
+          nodes { rating mediaRecommendation { ${MEDIA_FIELDS} } }
         }
       }
     }`;
-  return cached(`alrec:${anilistId}:${page}`, async () => {
-    const data = await anilist(query, { id: anilistId, page, perPage });
+  return cached(`alrec:${type}:${anilistId}:${page}`, async () => {
+    const data = await anilist(query, { id: anilistId, type, page, perPage });
     return (data.Media?.recommendations?.nodes || [])
       .filter((n) => n.mediaRecommendation && !n.mediaRecommendation.isAdult && (n.rating ?? 0) >= 0)
       .map((n) => normalizeAniList(n.mediaRecommendation));
+  });
+}
+export const mangaRecommendations = (id, page = 1, perPage = 20) => mediaRecommendations(id, 'MANGA', page, perPage);
+export const animeRecommendations = (id, page = 1, perPage = 20) => mediaRecommendations(id, 'ANIME', page, perPage);
+
+const formatDate = (d) => (d?.year ? d.year : null);
+
+/**
+ * Everything the detail card needs for one AniList title: a full description,
+ * format / length / studio / staff, next-airing info, a trailer link and the
+ * related titles (sequels, prequels, adaptations…).
+ */
+export function mediaDetails(anilistId, type = 'ANIME') {
+  const query = `
+    query ($id: Int, $type: MediaType) {
+      Media(id: $id, type: $type) {
+        ${MEDIA_FIELDS}
+        duration
+        season
+        seasonYear
+        popularity
+        siteUrl
+        endDate { year }
+        studios(isMain: true) { nodes { name } }
+        staff(perPage: 12, sort: RELEVANCE) { edges { role node { name { full } } } }
+        nextAiringEpisode { episode airingAt }
+        trailer { id site }
+        relations {
+          edges { relationType(version: 2) node { ${MEDIA_FIELDS} } }
+        }
+      }
+    }`;
+  return cached(`aldetail:${type}:${anilistId}`, async () => {
+    const data = await anilist(query, { id: anilistId, type }, true);
+    const m = data.Media;
+    if (!m) return null;
+    const trailerUrl = m.trailer?.id
+      ? (m.trailer.site === 'youtube' ? `https://www.youtube.com/watch?v=${m.trailer.id}`
+        : m.trailer.site === 'dailymotion' ? `https://www.dailymotion.com/video/${m.trailer.id}` : null)
+      : null;
+    const SHOW_RELATIONS = new Set(['PREQUEL', 'SEQUEL', 'PARENT', 'SIDE_STORY', 'SPIN_OFF', 'ALTERNATIVE', 'ADAPTATION', 'SOURCE', 'SUMMARY', 'CHARACTER', 'OTHER']);
+    return {
+      ...normalizeAniList(m),
+      description: stripHtml(m.description).slice(0, 1500),
+      duration: m.duration || null,
+      volumes: m.volumes || null,
+      season: m.season || null,
+      seasonYear: m.seasonYear || null,
+      endYear: formatDate(m.endDate),
+      popularity: m.popularity || 0,
+      siteUrl: m.siteUrl || '',
+      studios: (m.studios?.nodes || []).map((n) => n.name).filter(Boolean),
+      staff: (m.staff?.edges || [])
+        .map((e) => ({ role: e.role || '', name: e.node?.name?.full || '' }))
+        .filter((e) => e.name),
+      nextEpisode: m.nextAiringEpisode
+        ? { episode: m.nextAiringEpisode.episode, airingAt: m.nextAiringEpisode.airingAt * 1000 }
+        : null,
+      trailerUrl,
+      related: (m.relations?.edges || [])
+        .filter((e) => e.node && !e.node.isAdult && SHOW_RELATIONS.has(e.relationType))
+        .map((e) => ({ relation: e.relationType, hit: normalizeAniList(e.node) })),
+    };
+  });
+}
+
+/* ------------------------------- Staff -------------------------------- */
+
+function normalizeStaff(s) {
+  return {
+    source: 'anilist',
+    id: s.id,
+    name: s.name?.full || 'Unknown',
+    image: s.image?.medium || s.image?.large || null,
+    occupations: s.primaryOccupations || [],
+  };
+}
+
+/** People search (directors, mangaka, voice actors…). */
+export function searchStaff(search, perPage = 5) {
+  const query = `
+    query ($search: String, $perPage: Int) {
+      Page(page: 1, perPage: $perPage) {
+        staff(search: $search, sort: SEARCH_MATCH) {
+          id
+          name { full }
+          image { medium }
+          primaryOccupations
+        }
+      }
+    }`;
+  return cached(`alstaff:${search.toLowerCase()}:${perPage}`, async () => {
+    const data = await anilist(query, { search, perPage }, true);
+    return (data.Page?.staff || []).map(normalizeStaff);
+  });
+}
+
+/** One person's credits: production roles, plus (anime only) voice-acting roles. */
+export function staffDetails(staffId, type = 'ANIME') {
+  const query = `
+    query ($id: Int, $type: MediaType) {
+      Staff(id: $id) {
+        id
+        name { full }
+        image { large }
+        description(asHtml: false)
+        primaryOccupations
+        staffMedia(type: $type, sort: POPULARITY_DESC, perPage: 30) { nodes { ${MEDIA_FIELDS} } }
+        characterMedia(sort: POPULARITY_DESC, perPage: 30) { nodes { ${MEDIA_FIELDS} } }
+      }
+    }`;
+  return cached(`alstaffd:${type}:${staffId}`, async () => {
+    const data = await anilist(query, { id: staffId, type }, true);
+    const st = data.Staff;
+    if (!st) return null;
+    const seen = new Set();
+    const toHits = (nodes, onlyType) => (nodes || [])
+      .filter((m) => m && !m.isAdult && (!onlyType || m.type === onlyType) && m.coverImage?.large)
+      .filter((m) => (seen.has(m.id) ? false : (seen.add(m.id), true)))
+      .map(normalizeAniList);
+    return {
+      ...normalizeStaff(st),
+      image: st.image?.large || null,
+      bio: stripHtml(st.description).slice(0, 500),
+      credits: toHits(st.staffMedia?.nodes, type),
+      voice: type === 'ANIME' ? toHits(st.characterMedia?.nodes, 'ANIME') : [],
+    };
   });
 }
 
@@ -265,7 +415,7 @@ function categoriesToGenres(categories = []) {
   return out.slice(0, 5);
 }
 
-function normalizeBook(item) {
+function normalizeBook(item, descLen = 240) {
   const v = item.volumeInfo || {};
   const thumb = v.imageLinks?.thumbnail || v.imageLinks?.smallThumbnail || null;
   return {
@@ -281,17 +431,23 @@ function normalizeBook(item) {
     total: v.pageCount || null,
     genres: categoriesToGenres(v.categories),
     authors: v.authors || [],
-    description: shortText(v.description),
+    description: stripHtml(v.description).slice(0, descLen),
+    publisher: v.publisher || '',
+    published: v.publishedDate || '',
+    pages: v.pageCount || null,
+    ratingsCount: v.ratingsCount || 0,
+    link: v.infoLink || '',
   };
 }
 
 /**
  * Search / browse books.
- * opts: { page, perPage, q, orderBy ('relevance'|'newest'), subject, author, priority }
- * Books without a cover are dropped so rows always look good.
+ * opts: { page, perPage, q, orderBy ('relevance'|'newest'), subject, author, priority, requireCover }
+ * By default books without a cover are dropped so rows always look good
+ * (search passes requireCover: false so a title never goes missing).
  */
 export function browseBooks(opts = {}) {
-  const { page = 1, perPage = 20, q, orderBy = 'relevance', subject, author, priority } = opts;
+  const { page = 1, perPage = 20, q, orderBy = 'relevance', subject, author, priority, requireCover = true } = opts;
   const parts = [];
   if (q) parts.push(q);
   if (subject) parts.push(`subject:"${subject}"`);
@@ -314,7 +470,7 @@ export function browseBooks(opts = {}) {
   const keyUsed = googleBooksKey;
   const fetchOpts = { priority, blockMs: 5000 };
 
-  return cached(`gb:${buildUrl('')}`, async () => {
+  return cached(`gb:${requireCover ? 'c' : 'a'}:${buildUrl('')}`, async () => {
     let json;
     try {
       json = await limitedJson(booksLimiter, buildUrl(keyUsed), undefined, fetchOpts);
@@ -330,11 +486,30 @@ export function browseBooks(opts = {}) {
     return (json.items || [])
       .map(normalizeBook)
       .filter((b) => {
-        if (!b.cover) return false;
+        if (requireCover && !b.cover) return false;
         const key = b.title.toLowerCase();
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
       });
+  });
+}
+
+/** Full details for one Google Books volume (longer description, publisher…). */
+export function bookDetails(volumeId) {
+  const buildUrl = (key) => `${GOOGLE_BOOKS_URL}/${encodeURIComponent(volumeId)}${key ? `?key=${encodeURIComponent(key)}` : ''}`;
+  const keyUsed = googleBooksKey;
+  return cached(`gbvol:${volumeId}`, async () => {
+    let json;
+    try {
+      json = await limitedJson(booksLimiter, buildUrl(keyUsed), undefined, { priority: true, blockMs: 5000 });
+    } catch (err) {
+      if (keyUsed && /^http_(400|403)$/.test(err.message)) {
+        json = await limitedJson(booksLimiter, buildUrl(''), undefined, { priority: true, blockMs: 5000 });
+      } else {
+        throw err;
+      }
+    }
+    return json?.volumeInfo ? normalizeBook(json, 1500) : null;
   });
 }

@@ -4,7 +4,9 @@
 /*  { key, title, personal, fetchPage(page) -> Promise<hit[]> }            */
 /* ---------------------------------------------------------------------- */
 
-import { browseManga, mangaRecommendations, browseBooks } from './sources.js';
+import {
+  browseAnime, animeRecommendations, browseManga, mangaRecommendations, browseBooks,
+} from './sources.js';
 
 const STATUS_WEIGHT = { completed: 1, progress: 0.8, plan: 0.3, hold: 0.2, dropped: -0.8 };
 
@@ -37,6 +39,84 @@ function pickSeeds(list, idField, n) {
 }
 
 const PAGE = 20;
+
+/* ------------------------------- Anime ------------------------------- */
+
+const ANIME_DEFAULT_GENRES = [
+  'Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 'Romance', 'Sci-Fi',
+  'Slice of Life', 'Supernatural', 'Psychological', 'Mystery', 'Sports',
+  'Mecha', 'Horror', 'Thriller', 'Music',
+];
+
+// AniList seasons: Winter = Jan-Mar, Spring = Apr-Jun, Summer = Jul-Sep, Fall = Oct-Dec.
+export function currentSeason(date = new Date()) {
+  const m = date.getMonth();
+  const season = m <= 2 ? 'WINTER' : m <= 5 ? 'SPRING' : m <= 8 ? 'SUMMER' : 'FALL';
+  return { season, year: date.getFullYear() };
+}
+
+const titleCase = (s) => s[0] + s.slice(1).toLowerCase();
+
+export function planAnimeRows(entries) {
+  const mine = entries.filter((e) => e.type === 'anime');
+  const { season, year } = currentSeason();
+  const plans = [];
+
+  // 1. "Because you liked X" — real AniList community recommendations
+  pickSeeds(mine, 'anilistId', 2).forEach((seed) => {
+    plans.push({
+      key: `a:rec:${seed.anilistId}`,
+      title: `Because you liked ${seed.title}`,
+      personal: true,
+      fetchPage: (p) => animeRecommendations(seed.anilistId, p, PAGE),
+    });
+  });
+
+  // 2. Your top genres
+  const topGenres = rankBy(mine, 'genres').slice(0, 3).map(([g]) => g);
+  topGenres.forEach((g) => {
+    plans.push({
+      key: `a:genre:${g}`,
+      title: `More ${g} for you`,
+      personal: true,
+      fetchPage: (p) => browseAnime({ genre: g, sort: 'POPULARITY_DESC', page: p }),
+    });
+  });
+
+  // 3. What's happening now
+  plans.push(
+    { key: 'a:trend', title: 'Trending now', personal: false,
+      fetchPage: (p) => browseAnime({ sort: 'TRENDING_DESC', page: p }) },
+    { key: `a:season:${season}${year}`, title: `${titleCase(season)} ${year} season`, personal: false,
+      fetchPage: (p) => browseAnime({ season, seasonYear: year, sort: 'POPULARITY_DESC', page: p }) },
+    { key: 'a:soon', title: 'Coming soon', personal: false,
+      fetchPage: (p) => browseAnime({ status: 'NOT_YET_RELEASED', sort: 'POPULARITY_DESC', page: p }) },
+  );
+
+  // 4. Variety rows
+  plans.push(
+    { key: 'a:top', title: 'All-time top rated', personal: false,
+      fetchPage: (p) => browseAnime({ sort: 'SCORE_DESC', popMin: 60000, page: p }) },
+    { key: 'a:movies', title: 'Anime movies', personal: false,
+      fetchPage: (p) => browseAnime({ format: ['MOVIE'], sort: 'SCORE_DESC', popMin: 20000, page: p }) },
+    { key: 'a:finished', title: 'Binge-worthy: completed series', personal: false,
+      fetchPage: (p) => browseAnime({ status: 'FINISHED', format: ['TV'], sort: 'SCORE_DESC', popMin: 40000, page: p }) },
+    { key: 'a:gems', title: 'Hidden gems', personal: false,
+      fetchPage: (p) => browseAnime({ sort: 'SCORE_DESC', popMin: 8000, popMax: 40000, page: p }) },
+  );
+
+  // 5. Fill with genres you haven't shown yet
+  ANIME_DEFAULT_GENRES.filter((g) => !topGenres.includes(g)).forEach((g) => {
+    plans.push({
+      key: `a:def:${g}`,
+      title: g,
+      personal: false,
+      fetchPage: (p) => browseAnime({ genre: g, sort: 'POPULARITY_DESC', page: p }),
+    });
+  });
+
+  return plans;
+}
 
 /* ------------------------------- Manga ------------------------------- */
 
@@ -171,4 +251,14 @@ export function planBookRows(entries) {
   });
 
   return plans;
+}
+
+/* ------------------------- One entry point -------------------------- */
+
+/** Home-row plans for a non-TMDB source: 'anime' | 'manga' | 'books'. */
+export function planRowsFor(source, entries) {
+  if (source === 'anime') return planAnimeRows(entries);
+  if (source === 'manga') return planMangaRows(entries);
+  if (source === 'books') return planBookRows(entries);
+  return [];
 }

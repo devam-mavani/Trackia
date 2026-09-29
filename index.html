@@ -63,6 +63,15 @@
           </div>
         </header>
 
+        <!-- Source switch: each source is fully separate (search, rows,
+             and the "your library" rows all follow the selected one) -->
+        <nav class="type-tabs home-source-tabs" id="homeSourceTabs" aria-label="Browse by source">
+          <button type="button" class="source-tab active" data-source="tmdb">Movies &amp; TV</button>
+          <button type="button" class="source-tab" data-source="anime">Anime</button>
+          <button type="button" class="source-tab" data-source="manga">Manga</button>
+          <button type="button" class="source-tab" data-source="books">Books</button>
+        </nav>
+
         <div class="home-search-wrap">
           <div class="home-search">
             <svg class="home-search-icon" viewBox="0 0 24 24">
@@ -586,6 +595,11 @@
             <button type="button" class="btn-primary" id="detailEditBtn">
               Edit
             </button>
+          </div>
+
+          <div class="detail-related" id="detailRelated" hidden>
+            <h3>Related</h3>
+            <div class="hscroll detail-related-row" id="detailRelatedRow"></div>
           </div>
 
           <div class="detail-recs" id="detailRecsWrap" hidden>
