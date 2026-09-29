@@ -48,6 +48,7 @@ function loadSettings() {
     tileSize: 'medium',
     theme: { '--c-bg': '', '--c-surface': '', '--c-accent': '', '--c-text': '' },
     tmdbApiKey: '',
+    omdbApiKey: '',
   };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -304,6 +305,7 @@ function showPage(name) {
   moveNavIndicator();
   window.scrollTo({ top: 0 });
   if (name === 'home') renderHome();
+  $('#fabWrap').hidden = name === 'profile';
   if (name === 'rankings') renderRankings();
   if (name === 'profile') renderProfile();
 }
@@ -1737,6 +1739,106 @@ const detailTags = $('#detailTags');
 const detailNotesWrap = $('#detailNotesWrap');
 const detailNotes = $('#detailNotes');
 
+/* ---- Title details (director, cast, ratings) ----
+   Pulled from TMDB for entries/previews that have a TMDB id, cached
+   locally so reopening a card is instant and works offline. IMDb's own
+   rating isn't in TMDB, so it comes from OMDb when the person has added
+   an (optional) OMDb key in Settings. This only fills the #detailInfo
+   block — notes, tags and progress are rendered by their own code. */
+const detailInfo = $('#detailInfo');
+let detailInfoToken = 0;
+const INFO_TTL = 7 * 24 * 60 * 60 * 1000;
+const IMDB_TTL = 3 * 24 * 60 * 60 * 1000;
+
+function cacheGet(key, ttl) {
+  try {
+    const v = JSON.parse(localStorage.getItem(key) || 'null');
+    return v && Date.now() - v.at < ttl ? v : null;
+  } catch { return null; }
+}
+function cacheSet(key, val) {
+  try { localStorage.setItem(key, JSON.stringify({ ...val, at: Date.now() })); } catch {}
+}
+
+async function getTitleInfo(mediaType, id) {
+  const key = `trackia.meta.${mediaType}.${id}`;
+  const cached = cacheGet(key, INFO_TTL);
+  if (cached) return cached;
+  const [url, opts] = tmdbRequest(`/${mediaType}/${id}`, { append_to_response: 'credits,external_ids' });
+  const res = await fetchWithTimeout(url, opts, 12000);
+  if (!res.ok) return null;
+  const d = await res.json();
+  const crew = (d.credits && d.credits.crew) || [];
+  const cast = (d.credits && d.credits.cast) || [];
+  const names = (list, n) => list.slice(0, n).map((p) => p.name).filter(Boolean);
+  const info = {
+    imdbId: (d.external_ids && d.external_ids.imdb_id) || d.imdb_id || '',
+    tmdbRating: d.vote_average || 0,
+    people: mediaType === 'movie'
+      ? { label: 'Director', names: names(crew.filter((c) => c.job === 'Director'), 3) }
+      : { label: 'Created by', names: names(d.created_by || [], 3) },
+    cast: names(cast, 6),
+    runtime: mediaType === 'movie' ? d.runtime || 0 : (d.episode_run_time && d.episode_run_time[0]) || 0,
+    seasons: d.number_of_seasons || 0,
+    genres: (d.genres || []).slice(0, 4).map((g) => g.name),
+  };
+  cacheSet(key, info);
+  return info;
+}
+
+async function getImdbRating(imdbId) {
+  const key = `trackia.imdb.${imdbId}`;
+  const cached = cacheGet(key, IMDB_TTL);
+  if (cached) return cached;
+  const res = await fetchWithTimeout(`https://www.omdbapi.com/?i=${encodeURIComponent(imdbId)}&apikey=${encodeURIComponent(settings.omdbApiKey)}`, undefined, 12000);
+  if (!res.ok) return null;
+  const d = await res.json();
+  const rating = d && d.imdbRating && d.imdbRating !== 'N/A' ? d.imdbRating : '';
+  const out = { rating, votes: d && d.imdbVotes && d.imdbVotes !== 'N/A' ? d.imdbVotes : '' };
+  cacheSet(key, out);
+  return out;
+}
+
+function paintDetailInfo(info, myRating, imdb) {
+  const chips = [];
+  if (myRating) chips.push(`<div class="rate-chip you"><b>★ ${myRating}</b><span>You</span></div>`);
+  if (info.imdbId) {
+    const val = imdb && imdb.rating ? imdb.rating : 'Open';
+    chips.push(`<a class="rate-chip imdb" href="https://www.imdb.com/title/${escapeHtml(info.imdbId)}/" target="_blank" rel="noopener"><b>${escapeHtml(val)}</b><span>IMDb ↗</span></a>`);
+  }
+  if (info.tmdbRating) chips.push(`<div class="rate-chip"><b>${info.tmdbRating.toFixed(1)}</b><span>TMDB</span></div>`);
+
+  const facts = [];
+  if (info.people.names.length) facts.push(['<dt>' + escapeHtml(info.people.label) + '</dt>', escapeHtml(info.people.names.join(', '))]);
+  if (info.cast.length) facts.push(['<dt>Cast</dt>', escapeHtml(info.cast.join(', '))]);
+  const len = [];
+  if (info.runtime) len.push(`${info.runtime} min`);
+  if (info.seasons) len.push(`${info.seasons} season${info.seasons === 1 ? '' : 's'}`);
+  if (len.length) facts.push(['<dt>Length</dt>', escapeHtml(len.join(' · '))]);
+  if (info.genres.length) facts.push(['<dt>Genres</dt>', escapeHtml(info.genres.join(', '))]);
+
+  detailInfo.innerHTML =
+    (chips.length ? `<div class="detail-ratings">${chips.join('')}</div>` : '') +
+    (facts.length ? `<dl class="detail-facts">${facts.map(([dt, dd]) => `${dt}<dd>${dd}</dd>`).join('')}</dl>` : '');
+  detailInfo.hidden = !detailInfo.innerHTML;
+}
+
+async function showDetailInfo(mediaType, tmdbId, myRating) {
+  const token = ++detailInfoToken;
+  detailInfo.hidden = true;
+  detailInfo.innerHTML = '';
+  if (!mediaType || !tmdbId || !settings.tmdbApiKey) return;
+  try {
+    const info = await getTitleInfo(mediaType, tmdbId);
+    if (!info || token !== detailInfoToken) return;
+    paintDetailInfo(info, myRating, null);
+    if (settings.omdbApiKey && info.imdbId) {
+      const imdb = await getImdbRating(info.imdbId);
+      if (imdb && token === detailInfoToken) paintDetailInfo(info, myRating, imdb);
+    }
+  } catch { /* the rest of the card is unaffected */ }
+}
+
 /* ---- Title-card navigation ----
    The card can show a library entry OR a TMDB title that isn't in the
    library yet (a "preview" with an Add-to-list button). Tapping a title in
@@ -1834,6 +1936,7 @@ function renderPreviewDetail(hit, mediaType) {
   };
 
   startDetailRecs(mediaType, hit.id);
+  showDetailInfo(mediaType, hit.id, 0);
 
   // Fill in runtime / seasons / genres (and the overview if the list result
   // had none) without blocking the card from appearing.
@@ -1942,6 +2045,7 @@ function renderEntryDetail(id) {
   }
 
   loadDetailRecs(e);
+  showDetailInfo(e.type === 'movie' ? 'movie' : e.type === 'series' ? 'tv' : null, e.tmdbId, e.rating);
 }
 
 /* ---- "More like this" — TMDB recommendations, loaded as the detail
@@ -2980,6 +3084,13 @@ const tmdbApiKeyInput = $('#tmdbApiKeyInput');
 tmdbApiKeyInput.value = settings.tmdbApiKey || '';
 tmdbApiKeyInput.addEventListener('change', () => {
   settings.tmdbApiKey = tmdbApiKeyInput.value.trim();
+  saveSettings(settings);
+});
+
+const omdbApiKeyInput = $('#omdbApiKeyInput');
+omdbApiKeyInput.value = settings.omdbApiKey || '';
+omdbApiKeyInput.addEventListener('change', () => {
+  settings.omdbApiKey = omdbApiKeyInput.value.trim();
   saveSettings(settings);
 });
 

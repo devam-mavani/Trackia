@@ -177,15 +177,6 @@
           </p>
         </div>
 
-        <!-- FAB tab + plus -->
-        <div class="fab-wrap">
-          <button class="fab-tab" id="fabTab" aria-label="Quick add tab"></button>
-          <button class="fab" id="fabAdd" aria-label="Add entry">
-            <svg viewBox="0 0 24 24">
-              <path d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7V4z" />
-            </svg>
-          </button>
-        </div>
       </div>
 
       <!-- ==================================================================
@@ -274,6 +265,16 @@
 
           <p class="version-tag">Trackia · synced with your account</p>
         </div>
+      </div>
+
+      <!-- Manual "add entry" button — global (Home, Movies, Ranks), not tied to one page -->
+      <div class="fab-wrap" id="fabWrap">
+        <button class="fab-tab" id="fabTab" aria-label="Quick add tab"></button>
+        <button class="fab" id="fabAdd" aria-label="Add entry manually">
+          <svg viewBox="0 0 24 24">
+            <path d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7V4z" />
+          </svg>
+        </button>
       </div>
 
       <!-- ==================================================================
@@ -557,6 +558,8 @@
             </div>
           </div>
 
+          <div class="detail-info" id="detailInfo" hidden></div>
+
           <p class="detail-overview" id="detailOverview" hidden></p>
 
           <div class="chip-row detail-tags" id="detailTags" hidden></div>
@@ -761,6 +764,21 @@
                 type="text"
                 id="tmdbApiKeyInput"
                 placeholder="Paste your key here"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+            <p class="settings-hint">
+              <strong>Optional — IMDb ratings.</strong> TMDB doesn't carry
+              IMDb scores. Paste a free key from omdbapi.com/apikey.aspx to
+              show the IMDb rating on a title's card.
+            </p>
+            <label class="field">
+              <span>OMDb API key (optional)</span>
+              <input
+                type="text"
+                id="omdbApiKeyInput"
+                placeholder="Paste your OMDb key here"
                 autocomplete="off"
                 spellcheck="false"
               />
