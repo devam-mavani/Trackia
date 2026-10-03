@@ -97,6 +97,7 @@ function makeLimiter({ minGapMs, concurrency }) {
 // AniList: ~30 req/min currently => 1 request every ~2.2s stays under it.
 const anilistLimiter = makeLimiter({ minGapMs: 2200, concurrency: 1 });
 const booksLimiter = makeLimiter({ minGapMs: 350, concurrency: 2 });
+const openLibraryLimiter = makeLimiter({ minGapMs: 250, concurrency: 2 });
 
 async function fetchJson(url, opts = {}, ms = 15000) {
   const ctrl = new AbortController();
@@ -120,12 +121,12 @@ async function fetchJson(url, opts = {}, ms = 15000) {
 }
 
 // Queue a request; on a 429 pause this service and retry once.
-async function limitedJson(limiter, url, opts, { priority = false, blockMs = 5000 } = {}) {
+async function limitedJson(limiter, url, opts, { priority = false, blockMs = 5000, retry = true, timeoutMs = 15000 } = {}) {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await limiter.run(() => fetchJson(url, opts), priority);
+      return await limiter.run(() => fetchJson(url, opts, timeoutMs), priority);
     } catch (err) {
-      if (err.message === 'rate_limited' && attempt < 1) {
+      if (retry && err.message === 'rate_limited' && attempt < 1) {
         limiter.block(err.retryAfterMs || blockMs);
         continue;
       }
@@ -440,11 +441,119 @@ function normalizeBook(item, descLen = 240) {
   };
 }
 
+/* ------------------- Open Library (keyless fallback) ------------------- */
+/*  Google Books throttles keyless traffic hard (HTTP 429 / 403), which    */
+/*  used to leave every Books row on Home showing an error. When Google    */
+/*  fails we transparently fall back to Open Library, which needs no key   */
+/*  and allows cross-origin requests. Results use the same "hit" shape and  */
+/*  ids are prefixed "ol:" so bookDetails() knows where to look them up.   */
+
+const OPEN_LIBRARY = 'https://openlibrary.org';
+const OL_FIELDS = 'key,title,author_name,first_publish_year,cover_i,subject,number_of_pages_median,ratings_average,ratings_count,publisher';
+const OL_JUNK_SUBJECT = /daisy|accessible|in library|large type|lending|overdrive|open library|nyt:|reading level|^(fiction|general)$/i;
+
+function olSubjects(list = []) {
+  const out = [];
+  list.forEach((g) => {
+    const name = String(g).trim();
+    if (name && name.length <= 30 && !OL_JUNK_SUBJECT.test(name) && !out.some((x) => x.toLowerCase() === name.toLowerCase())) {
+      out.push(name.charAt(0).toUpperCase() + name.slice(1));
+    }
+  });
+  return out.slice(0, 5);
+}
+
+function normalizeOpenLibrary(d) {
+  const workId = String(d.key || '').replace('/works/', '');
+  return {
+    source: 'gbooks', // keeps library syncing / "In list" matching working unchanged
+    id: `ol:${workId}`,
+    title: d.title || 'Untitled',
+    cover: d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg` : null,
+    year: d.first_publish_year || null,
+    score: d.ratings_average ? Math.round(d.ratings_average * 20) / 10 : null, // 0-5 -> 0-10
+    kind: 'book',
+    total: d.number_of_pages_median || null,
+    genres: olSubjects(d.subject),
+    authors: d.author_name || [],
+    description: '',
+    publisher: (d.publisher && d.publisher[0]) || '',
+    published: d.first_publish_year ? String(d.first_publish_year) : '',
+    pages: d.number_of_pages_median || null,
+    ratingsCount: d.ratings_count || 0,
+    link: workId ? `${OPEN_LIBRARY}/works/${workId}` : '',
+  };
+}
+
+function openLibraryBooks({ page, perPage, q, orderBy, subject, author, priority, requireCover }) {
+  const parts = [];
+  if (q) parts.push(String(q).replace(/\binauthor:/g, 'author:'));
+  if (subject) parts.push(`subject:"${subject}"`);
+  if (author) parts.push(`author:"${author}"`);
+  if (!parts.length) parts.push('subject:fiction');
+  parts.push('language:eng');
+  if (orderBy === 'newest') {
+    const y = new Date().getFullYear();
+    parts.push(`first_publish_year:[${y - 1} TO ${y}]`);
+  }
+  const params = new URLSearchParams({
+    q: parts.join(' '),
+    limit: String(perPage),
+    page: String(page),
+    fields: OL_FIELDS,
+  });
+  return limitedJson(openLibraryLimiter, `${OPEN_LIBRARY}/search.json?${params}`, undefined, { priority, blockMs: 5000, timeoutMs: 20000 })
+    .then((json) => {
+      const seen = new Set();
+      return (json.docs || [])
+        .filter((d) => d.title && d.key)
+        .map(normalizeOpenLibrary)
+        .filter((b) => {
+          if (requireCover && !b.cover) return false;
+          const key = b.title.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+    });
+}
+
+async function openLibraryDetails(workId) {
+  const [doc, work] = await Promise.all([
+    limitedJson(openLibraryLimiter, `${OPEN_LIBRARY}/search.json?${new URLSearchParams({ q: `key:/works/${workId}`, fields: OL_FIELDS, limit: '1' })}`,
+      undefined, { priority: true, timeoutMs: 20000 }).then((j) => j.docs?.[0]).catch(() => null),
+    limitedJson(openLibraryLimiter, `${OPEN_LIBRARY}/works/${encodeURIComponent(workId)}.json`,
+      undefined, { priority: true, timeoutMs: 20000 }).catch(() => null),
+  ]);
+  if (!doc && !work) return null;
+  const base = normalizeOpenLibrary(doc || { key: `/works/${workId}`, title: work.title });
+  const rawDesc = typeof work?.description === 'string' ? work.description : work?.description?.value || '';
+  const desc = stripHtml(rawDesc).replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').split(/\s*-{3,}\s*/)[0];
+  return {
+    ...base,
+    cover: base.cover || (work?.covers?.[0] ? `https://covers.openlibrary.org/b/id/${work.covers[0]}-M.jpg` : null),
+    description: desc.slice(0, 1500),
+    genres: base.genres.length ? base.genres : olSubjects(work?.subjects),
+  };
+}
+
+/* ----------------- Google Books: browse + details ------------------ */
+// If Google rejects / throttles us, skip it for a while and go straight to
+// Open Library so rows don't each wait on a request that is going to fail.
+let googleSkipUntil = 0;
+const GOOGLE_TIMEOUT_MS = 9000;
+const googleFailure = (err) => /^(rate_limited|network|timeout|http_(400|401|403|404|429|5\d\d))$/.test(err?.message || '');
+function noteGoogleFailure(err) {
+  const m = err?.message || '';
+  googleSkipUntil = Date.now() + (m === 'rate_limited' || /^http_(403|429)$/.test(m) ? 120000 : 20000);
+}
+
 /**
  * Search / browse books.
  * opts: { page, perPage, q, orderBy ('relevance'|'newest'), subject, author, priority, requireCover }
  * By default books without a cover are dropped so rows always look good
  * (search passes requireCover: false so a title never goes missing).
+ * Tries Google Books first, then Open Library if Google is throttled / down.
  */
 export function browseBooks(opts = {}) {
   const { page = 1, perPage = 20, q, orderBy = 'relevance', subject, author, priority, requireCover = true } = opts;
@@ -468,22 +577,37 @@ export function browseBooks(opts = {}) {
     return `${GOOGLE_BOOKS_URL}?${params.toString().replace(/%2B/g, '+')}`;
   };
   const keyUsed = googleBooksKey;
-  const fetchOpts = { priority, blockMs: 5000 };
+  const fetchOpts = { priority, blockMs: 5000, retry: false, timeoutMs: GOOGLE_TIMEOUT_MS };
 
   return cached(`gb:${requireCover ? 'c' : 'a'}:${buildUrl('')}`, async () => {
+    const viaOpenLibrary = () => openLibraryBooks({ page, perPage, q, orderBy, subject, author, priority, requireCover });
+
+    if (Date.now() < googleSkipUntil) return viaOpenLibrary();
+
     let json;
     try {
-      json = await limitedJson(booksLimiter, buildUrl(keyUsed), undefined, fetchOpts);
+      try {
+        json = await limitedJson(booksLimiter, buildUrl(keyUsed), undefined, fetchOpts);
+      } catch (err) {
+        // A wrong / blocked key shouldn't break every row: retry on the shared quota.
+        if (keyUsed && /^http_(400|403)$/.test(err.message)) {
+          json = await limitedJson(booksLimiter, buildUrl(''), undefined, fetchOpts);
+        } else {
+          throw err;
+        }
+      }
     } catch (err) {
-      // A wrong / blocked key shouldn't break every row: retry on the shared quota.
-      if (keyUsed && /^http_(400|403)$/.test(err.message)) {
-        json = await limitedJson(booksLimiter, buildUrl(''), undefined, fetchOpts);
-      } else {
-        throw err;
+      if (!googleFailure(err)) throw err;
+      noteGoogleFailure(err);
+      try {
+        return await viaOpenLibrary();
+      } catch {
+        throw err; // both failed: report Google's reason
       }
     }
+
     const seen = new Set();
-    return (json.items || [])
+    const list = (json.items || [])
       .map(normalizeBook)
       .filter((b) => {
         if (requireCover && !b.cover) return false;
@@ -492,20 +616,30 @@ export function browseBooks(opts = {}) {
         seen.add(key);
         return true;
       });
+    // Google sometimes answers 200 with nothing for a perfectly good query: try Open Library too.
+    if (!list.length && page === 1) {
+      try { return await viaOpenLibrary(); } catch { /* keep the empty list */ }
+    }
+    return list;
   });
 }
 
-/** Full details for one Google Books volume (longer description, publisher…). */
+/** Full details for one book (longer description, publisher…). */
 export function bookDetails(volumeId) {
+  if (String(volumeId).startsWith('ol:')) {
+    const workId = String(volumeId).slice(3);
+    return cached(`olwork:${workId}`, () => openLibraryDetails(workId));
+  }
   const buildUrl = (key) => `${GOOGLE_BOOKS_URL}/${encodeURIComponent(volumeId)}${key ? `?key=${encodeURIComponent(key)}` : ''}`;
   const keyUsed = googleBooksKey;
+  const fetchOpts = { priority: true, blockMs: 5000, retry: false, timeoutMs: GOOGLE_TIMEOUT_MS };
   return cached(`gbvol:${volumeId}`, async () => {
     let json;
     try {
-      json = await limitedJson(booksLimiter, buildUrl(keyUsed), undefined, { priority: true, blockMs: 5000 });
+      json = await limitedJson(booksLimiter, buildUrl(keyUsed), undefined, fetchOpts);
     } catch (err) {
       if (keyUsed && /^http_(400|403)$/.test(err.message)) {
-        json = await limitedJson(booksLimiter, buildUrl(''), undefined, { priority: true, blockMs: 5000 });
+        json = await limitedJson(booksLimiter, buildUrl(''), undefined, fetchOpts);
       } else {
         throw err;
       }

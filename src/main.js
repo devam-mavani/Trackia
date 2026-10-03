@@ -1551,11 +1551,14 @@ async function pullRankingsFromCloud() {
   } catch { /* offline or no cloud copy yet */ }
 }
 
+// id -> entry lookup, built once per render instead of `entries.find` per row.
+const entryMap = () => new Map(entries.map((e) => [e.id, e]));
+
 // The ids in a list that still exist (and still match the list's type).
-function rankedIds(listKey) {
+function rankedIds(listKey, byId = entryMap()) {
   const ids = rankings.lists[listKey] || [];
   const valid = ids.filter((id) => {
-    const e = entries.find((x) => x.id === id);
+    const e = byId.get(id);
     return e && (listKey === 'all' || e.type === listKey);
   });
   if (valid.length !== ids.length) rankings.lists[listKey] = valid;
@@ -1568,9 +1571,10 @@ function makeRankCover(e, cls = 'rank-cover') {
   cover.style.background = e.cover ? 'transparent' : colorForString(e.title || e.id);
   if (e.cover) {
     const img = document.createElement('img');
-    img.src = e.cover;
-    img.alt = '';
+    img.decoding = 'async'; // decode off the main thread so long lists don't stall scrolling
     img.loading = 'lazy';
+    img.alt = '';
+    img.src = e.cover;
     cover.appendChild(img);
   } else {
     const span = document.createElement('span');
@@ -1581,17 +1585,30 @@ function makeRankCover(e, cls = 'rank-cover') {
   return cover;
 }
 
-function renderRankings() {
-  rankTabsEl.innerHTML = RANK_LISTS.map(([key, label]) =>
-    `<button type="button" class="rank-tab${key === currentRankList ? ' active' : ''}" data-list="${key}">${label}</button>`).join('');
+const RANK_REMOVE_SVG = '<svg viewBox="0 0 24 24"><path d="M6.4 5L5 6.4l5.6 5.6L5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6 6.4 5z"/></svg>';
+const RANK_HANDLE_SVG = '<svg viewBox="0 0 24 24"><path d="M3 15h18v-2H3v2zm0 4h18v-2H3v2zm0-8h18V9H3v2zm0-6v2h18V5H3z"/></svg>';
 
-  const ids = rankedIds(currentRankList);
-  rankListEl.innerHTML = '';
+function buildRankTabs() {
+  rankTabsEl.innerHTML = RANK_LISTS.map(([key, label]) =>
+    `<button type="button" class="rank-tab" data-list="${key}">${label}</button>`).join('');
+}
+function markActiveRankTab() {
+  if (!rankTabsEl.firstElementChild) buildRankTabs();
+  rankTabsEl.querySelectorAll('.rank-tab').forEach((b) => b.classList.toggle('active', b.dataset.list === currentRankList));
+}
+
+function renderRankings() {
+  markActiveRankTab();
+
+  const byId = entryMap();
+  const ids = rankedIds(currentRankList, byId);
   rankEmptyEl.hidden = ids.length !== 0;
   rankHintEl.hidden = ids.length < 2;
 
+  // Build off-DOM and insert once: one layout pass instead of one per row.
+  const frag = document.createDocumentFragment();
   ids.forEach((id, i) => {
-    const e = entries.find((x) => x.id === id);
+    const e = byId.get(id);
     const row = document.createElement('div');
     row.className = 'rank-item';
     row.dataset.id = id;
@@ -1605,39 +1622,56 @@ function renderRankings() {
     info.className = 'rank-info';
     info.innerHTML = `<div class="rank-title">${escapeHtml(e.title)}</div>
       <div class="rank-meta">${escapeHtml(TYPE_LABEL[e.type] || e.type)}${e.rating ? ` · ★ ${e.rating}` : ''}</div>`;
-    info.addEventListener('click', () => openDetailSheet(id));
 
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'rank-remove';
     remove.setAttribute('aria-label', 'Remove from ranking');
-    remove.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6.4 5L5 6.4l5.6 5.6L5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6 6.4 5z"/></svg>';
-    remove.addEventListener('click', () => {
-      rankings.lists[currentRankList] = rankedIds(currentRankList).filter((x) => x !== id);
-      saveRankings();
-      renderRankings();
-    });
+    remove.innerHTML = RANK_REMOVE_SVG;
 
     const handle = document.createElement('span');
     handle.className = 'rank-handle';
     handle.setAttribute('aria-label', 'Drag to reorder');
-    handle.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 15h18v-2H3v2zm0 4h18v-2H3v2zm0-8h18V9H3v2zm0-6v2h18V5H3z"/></svg>';
+    handle.innerHTML = RANK_HANDLE_SVG;
 
     row.append(num, makeRankCover(e), info, remove, handle);
-    rankListEl.appendChild(row);
+    frag.appendChild(row);
   });
+  rankListEl.replaceChildren(frag);
 }
+
+// One delegated listener for every row (instead of two per row per render).
+rankListEl.addEventListener('click', (ev) => {
+  const row = ev.target.closest('.rank-item');
+  if (!row) return;
+  const id = row.dataset.id;
+  if (ev.target.closest('.rank-remove')) {
+    rankings.lists[currentRankList] = rankedIds(currentRankList).filter((x) => x !== id);
+    saveRankings();
+    row.remove(); // no need to rebuild the whole list for one removal
+    const rows = [...rankListEl.children];
+    rows.forEach((el, i) => {
+      el.dataset.pos = String(i + 1);
+      el.querySelector('.rank-num').textContent = String(i + 1);
+    });
+    rankEmptyEl.hidden = rows.length !== 0;
+    rankHintEl.hidden = rows.length < 2;
+    return;
+  }
+  if (ev.target.closest('.rank-info')) openDetailSheet(id);
+});
 
 rankTabsEl.addEventListener('click', (ev) => {
   const btn = ev.target.closest('.rank-tab');
-  if (!btn) return;
+  if (!btn || btn.dataset.list === currentRankList) return;
   currentRankList = btn.dataset.list;
   renderRankings();
 });
 
 /* ---- Drag to reorder: the row follows the finger; when its centre passes
    a neighbour's midpoint the two swap in the DOM. The final DOM order is
-   what gets saved. ---- */
+   what gets saved. Pointer moves are coalesced to one update per frame, and
+   layout is only read once per frame, so the drag stays smooth on long lists. ---- */
 rankListEl.addEventListener('pointerdown', (ev) => {
   const handle = ev.target.closest('.rank-handle');
   if (!handle) return;
@@ -1646,20 +1680,23 @@ rankListEl.addEventListener('pointerdown', (ev) => {
   handle.setPointerCapture(ev.pointerId);
   item.classList.add('dragging');
   let startY = ev.clientY;
+  let lastY = ev.clientY;
+  let raf = 0;
 
   const renumber = () => [...rankListEl.children].forEach((el, i) => {
     el.dataset.pos = String(i + 1);
     el.querySelector('.rank-num').textContent = String(i + 1);
   });
 
-  const move = (m) => {
-    item.style.transform = `translateY(${m.clientY - startY}px)`;
+  const frame = () => {
+    raf = 0;
+    item.style.transform = `translateY(${lastY - startY}px)`;
     const swapWith = (sib) => {
       const before = item.getBoundingClientRect().top;
       if (sib === item.nextElementSibling) rankListEl.insertBefore(sib, item);
       else rankListEl.insertBefore(item, sib);
       startY += item.getBoundingClientRect().top - before;
-      item.style.transform = `translateY(${m.clientY - startY}px)`;
+      item.style.transform = `translateY(${lastY - startY}px)`;
       renumber();
     };
     const r = item.getBoundingClientRect();
@@ -1668,11 +1705,16 @@ rankListEl.addEventListener('pointerdown', (ev) => {
     const prev = item.previousElementSibling;
     if (next) { const nr = next.getBoundingClientRect(); if (c > nr.top + nr.height / 2) swapWith(next); }
     if (prev) { const pr = prev.getBoundingClientRect(); if (c < pr.top + pr.height / 2) swapWith(prev); }
-    // Nudge the page when dragging near the top/bottom edge.
-    if (m.clientY < 90) window.scrollBy(0, -10);
-    else if (m.clientY > window.innerHeight - 150) window.scrollBy(0, 10);
+    // Nudge the page when dragging near the top/bottom edge (keep going while held there).
+    if (lastY < 90) { window.scrollBy(0, -10); raf = requestAnimationFrame(frame); }
+    else if (lastY > window.innerHeight - 150) { window.scrollBy(0, 10); raf = requestAnimationFrame(frame); }
+  };
+  const move = (m) => {
+    lastY = m.clientY;
+    if (!raf) raf = requestAnimationFrame(frame);
   };
   const end = () => {
+    if (raf) cancelAnimationFrame(raf);
     handle.removeEventListener('pointermove', move);
     handle.removeEventListener('pointerup', end);
     handle.removeEventListener('pointercancel', end);
@@ -1695,11 +1737,12 @@ function renderRankPicker() {
     .filter((e) => !q || (e.title || '').toLowerCase().includes(q))
     .sort((a, b) => (b.rating || 0) - (a.rating || 0) || (a.title || '').localeCompare(b.title || ''));
 
-  rankPickListEl.innerHTML = '';
+  rankPickListEl.replaceChildren();
   if (!pool.length) {
     rankPickListEl.innerHTML = `<div class="search-status-msg">${entries.length ? 'Everything here is already ranked.' : 'Add some titles to your library first.'}</div>`;
     return;
   }
+  const pickFrag = document.createDocumentFragment();
   pool.forEach((e) => {
     const row = document.createElement('button');
     row.type = 'button';
@@ -1718,8 +1761,9 @@ function renderRankPicker() {
       renderRankings();
       renderRankPicker();
     });
-    rankPickListEl.appendChild(row);
+    pickFrag.appendChild(row);
   });
+  rankPickListEl.appendChild(pickFrag);
 }
 
 $('#rankAddBtn').addEventListener('click', () => {
@@ -1729,7 +1773,8 @@ $('#rankAddBtn').addEventListener('click', () => {
   renderRankPicker();
   openSheet(rankSheet);
 });
-rankPickSearch.addEventListener('input', renderRankPicker);
+let rankPickTimer = null;
+rankPickSearch.addEventListener('input', () => { clearTimeout(rankPickTimer); rankPickTimer = setTimeout(renderRankPicker, 120); });
 
 function renderProfile() {
   const total = entries.length;

@@ -38,6 +38,7 @@
   --glass-blur-soft: 14px;
   --glass-sat: 1.7;
   --glass-fill: color-mix(in srgb, var(--c-surface) 58%, transparent);
+  --glass-fill-flat: color-mix(in srgb, var(--c-surface) 74%, transparent);
   --glass-fill-strong: color-mix(in srgb, var(--c-surface) 80%, transparent);
   --glass-fill-soft: color-mix(in srgb, var(--c-surface-2) 55%, transparent);
   --glass-fill-press: color-mix(in srgb, var(--c-surface-2) 72%, transparent);
@@ -92,12 +93,6 @@ body::before {
     radial-gradient(circle at 20% 8%, color-mix(in srgb, var(--c-accent) 32%, transparent), transparent 55%),
     radial-gradient(circle at 88% 20%, color-mix(in srgb, var(--c-accent) 16%, transparent), transparent 50%),
     radial-gradient(circle at 30% 95%, color-mix(in srgb, var(--c-text) 7%, transparent), transparent 55%);
-  filter: blur(70px);
-  animation: auroraDrift 26s var(--ease-smooth) infinite alternate;
-}
-@keyframes auroraDrift {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to { transform: translate3d(-3%, 2%, 0) scale(1.08); }
 }
 
 body[data-font="small"] {
@@ -217,7 +212,6 @@ body[data-tile="large"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  body::before { animation: none; }
   .page { animation: none; }
   .nav-indicator { transition: none; }
 }
@@ -495,8 +489,6 @@ body[data-tile="large"] {
   top: 6px;
   right: 6px;
   background: var(--glass-fill-strong);
-  -webkit-backdrop-filter: blur(8px) saturate(var(--glass-sat));
-  backdrop-filter: blur(8px) saturate(var(--glass-sat));
   color: #fff;
   font-size: 0.62rem;
   font-weight: 700;
@@ -641,13 +633,11 @@ body[data-tile="large"] {
   margin-bottom: 22px;
 }
 .stat-card {
-  background: var(--glass-fill);
+  background: var(--glass-fill-flat);
   border: 1px solid var(--glass-edge);
   border-radius: 14px;
   padding: 14px 10px;
   text-align: center;
-  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
   box-shadow: inset 0 1px 0 var(--glass-sheen-soft);
 }
 .stat-value {
@@ -670,12 +660,10 @@ body[data-tile="large"] {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: var(--glass-fill);
+  background: var(--glass-fill-flat);
   border: 1px solid var(--glass-edge);
   border-radius: 12px;
   padding: 10px 14px;
-  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
   box-shadow: inset 0 1px 0 var(--glass-sheen-soft);
 }
 .breakdown-row .b-label {
@@ -694,14 +682,12 @@ body[data-tile="large"] {
   align-items: center;
   gap: 12px;
   width: 100%;
-  background: var(--glass-fill);
+  background: var(--glass-fill-flat);
   border: 1px solid var(--glass-edge);
   border-radius: 14px;
   padding: 14px 16px;
   margin-top: 4px;
   color: var(--c-text);
-  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
   box-shadow: inset 0 1px 0 var(--glass-sheen-soft);
   transition: background 0.2s var(--ease-smooth), transform 0.2s var(--ease-spring), box-shadow 0.2s var(--ease-smooth);
 }
@@ -1030,7 +1016,7 @@ textarea:focus-visible {
 }
 
 .card {
-  background: var(--glass-fill);
+  background: var(--glass-fill-flat);
   border: 1px solid var(--glass-edge);
   border-radius: 16px;
   overflow: hidden;
@@ -1038,8 +1024,6 @@ textarea:focus-visible {
   flex-direction: column;
   position: relative;
   cursor: pointer;
-  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
   box-shadow: inset 0 1px 0 var(--glass-sheen-soft), 0 4px 16px rgba(0, 0, 0, 0.25);
   transition:
     transform 0.22s var(--ease-smooth),
@@ -1162,8 +1146,6 @@ textarea:focus-visible {
   font-weight: 700;
   padding: 3px 8px;
   border-radius: 999px;
-  -webkit-backdrop-filter: blur(8px) saturate(var(--glass-sat));
-  backdrop-filter: blur(8px) saturate(var(--glass-sat));
   letter-spacing: 0.02em;
 }
 .badge-type {
@@ -2190,16 +2172,22 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: 12px;
-  background: var(--glass-fill);
+  background: var(--glass-fill-flat);
   border: 1px solid var(--glass-edge);
   border-radius: 14px;
   padding: 8px 10px 8px 12px;
-  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
   user-select: none;
   -webkit-user-select: none;
 }
+.rank-item {
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 76px;
+}
 .rank-item.dragging {
+  content-visibility: visible;
+  will-change: transform;
+  contain: layout style;
   z-index: 30;
   border-color: var(--c-accent);
   box-shadow: var(--glass-shadow-lg);
@@ -2377,3 +2365,6 @@ textarea:focus-visible {
 .detail-related-row { padding-left: 0; padding-right: 0; }
 .rate-chip.anilist b { color: #3db4f2; }
 .detail-facts a { color: var(--c-accent); text-decoration: none; font-weight: 600; }
+
+/* Rankings: no entrance animation on every tab switch (it re-ran the fade over the whole list). */
+#page-rankings.page { animation: none; }
